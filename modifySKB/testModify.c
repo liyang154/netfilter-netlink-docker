@@ -39,11 +39,7 @@ unsigned int my_hookout(unsigned int hooknum,struct sk_buff *skb,
     unsigned int ntcp_hdr_off;
     if(likely(iph->protocol==IPPROTO_UDP))
     {
-<<<<<<< HEAD
-        printk("requestceshi UDP\n");
-=======
         printk("request UDP\n");
->>>>>>> origin/master
        /* udph->check = 0;
         iph->check = 0;
         skb->csum = 0;
