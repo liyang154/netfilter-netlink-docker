@@ -1,0 +1,2 @@
+# netfilter-netlink-docker
+基于NETFILTER挂载点开发一个内核模块，捕获docker相关流量的数据包；使用内核态netlink套接字动态配置捕获流量的IP地址、功能开关等，并输出捕获结果；对sk_buff进行操作，篡改数据包ip地址、复制数据包并进行转发、丢弃数据包等；创建slab缓存对docker流量进行记录，并设置自旋锁、超时定时器等。
