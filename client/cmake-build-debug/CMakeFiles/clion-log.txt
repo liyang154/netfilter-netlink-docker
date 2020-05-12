@@ -1,0 +1,4 @@
+/clion-2019.3.1/bin/cmake/linux/bin/cmake -DCMAKE_BUILD_TYPE=Debug -G "CodeBlocks - Unix Makefiles" /root/modules/csdnNetlink/client
+-- Configuring done
+-- Generating done
+-- Build files have been written to: /root/modules/csdnNetlink/client/cmake-build-debug
