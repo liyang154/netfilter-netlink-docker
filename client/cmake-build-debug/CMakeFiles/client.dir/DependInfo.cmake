@@ -4,7 +4,7 @@ set(CMAKE_DEPENDS_LANGUAGES
   )
 # The set of files for implicit dependencies of each language:
 set(CMAKE_DEPENDS_CHECK_C
-  "/root/modules/csdnNetlink/client/main.c" "/root/modules/csdnNetlink/client/cmake-build-debug/CMakeFiles/client.dir/main.c.o"
+  "/root/modules/netfilter-netlink-docker/client/main.c" "/root/modules/netfilter-netlink-docker/client/cmake-build-debug/CMakeFiles/client.dir/main.c.o"
   )
 set(CMAKE_C_COMPILER_ID "GNU")
 

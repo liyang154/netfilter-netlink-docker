@@ -1,4 +1,4 @@
-# Install script for directory: /root/modules/csdnNetlink/client
+# Install script for directory: /root/modules/netfilter-netlink-docker/client
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)
@@ -45,5 +45,5 @@ endif()
 
 string(REPLACE ";" "\n" CMAKE_INSTALL_MANIFEST_CONTENT
        "${CMAKE_INSTALL_MANIFEST_FILES}")
-file(WRITE "/root/modules/csdnNetlink/client/cmake-build-debug/${CMAKE_INSTALL_MANIFEST}"
+file(WRITE "/root/modules/netfilter-netlink-docker/client/cmake-build-debug/${CMAKE_INSTALL_MANIFEST}"
      "${CMAKE_INSTALL_MANIFEST_CONTENT}")
