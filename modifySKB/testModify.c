@@ -62,8 +62,6 @@ unsigned int my_hookout(unsigned int hooknum,struct sk_buff *skb,
         iph->daddr=in_aton("218.7.43.8");
         ip_hdr_off = iph->ihl << 2;
         ntcp_hdr_off = tcph->doff << 2;
-
-
         tcph->check = 0;
         iph->check = 0;
         skb->csum = 0;
