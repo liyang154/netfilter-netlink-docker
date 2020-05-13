@@ -15,7 +15,7 @@
 #include <uapi/linux/netfilter_ipv4.h>
 #include <linux/mm.h>
 #include <net/ip.h>
-////ccccccdddfffffggg
+////aaabbbccc
 unsigned int tcp_v4_check(int len, u_int32_t saddr, u_int32_t daddr, int num)
 {
     return csum_tcpudp_magic(saddr,daddr,len, IPPROTO_TCP,0); ;
