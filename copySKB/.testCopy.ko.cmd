@@ -1,1 +1,0 @@
-cmd_/root/modules/netfilter-netlink-docker/copySKB/testCopy.ko := ld -r -m elf_x86_64 -T ./scripts/module-common.lds --build-id  -o /root/modules/netfilter-netlink-docker/copySKB/testCopy.ko /root/modules/netfilter-netlink-docker/copySKB/testCopy.o /root/modules/netfilter-netlink-docker/copySKB/testCopy.mod.o

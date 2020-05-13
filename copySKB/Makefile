@@ -7,7 +7,7 @@ KERNEL_DIR := /lib/modules/$(shell uname -r)/build
 modules:
 	@$(MAKE) -C $(KERNEL_DIR) M=$(PWD) modules
 clean:
-	@rm -rf *.ko *.o *.mod.c *symvers *order .nl* .tmp* *.cmd
+	@rm -rf *.ko *.o *.mod.c *symvers *order .nl* .tmp* .testCopy.*
 install:
 	/sbin/insmod testCopy.ko
 remove:
