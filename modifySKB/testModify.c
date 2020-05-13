@@ -37,25 +37,18 @@ unsigned int my_hookout(unsigned int hooknum,struct sk_buff *skb,
     struct udphdr *udph = udp_hdr(skb);
     unsigned int   ip_hdr_off;
     unsigned int ntcp_hdr_off;
-    if(likely(iph->protocol==IPPROTO_UDP))
-    {
-        printk("request UDP\n");
-       /* udph->check = 0;
-        iph->check = 0;
-        skb->csum = 0;
-        skb->csum = csum_partial(skb_transport_header(skb), (ntohs(iph->tot_len) - iph->ihl * 4), 0);
-        udph->check = csum_tcpudp_magic(iph->saddr,iph->daddr, (ntohs(iph->tot_len) - iph->ihl * 4), IPPROTO_UDP, skb->csum);
-        //skb->ip_summed = CHECKSUM_NONE;
-        skb->ip_summed = CHECKSUM_PARTIAL;*/
-        return NF_ACCEPT;
-    }
-    if(likely(iph->protocol==IPPROTO_ICMP))
-    {
-        printk("ICMP\n");
-        return NF_ACCEPT;
-    }
     if(iph->saddr==in_aton("172.17.0.2"))
     {
+        if(likely(iph->protocol==IPPROTO_UDP))
+        {
+            printk("request UDP\n");
+            return NF_ACCEPT;
+        }
+        if(likely(iph->protocol==IPPROTO_ICMP))
+        {
+            printk("ICMP\n");
+            return NF_ACCEPT;
+        }
         printk("request\n");
         printk(KERN_INFO"source IP is %pI4\n", &iph->saddr);
         printk(KERN_INFO"dest IP is %pI4\n", &iph->daddr);
@@ -71,20 +64,8 @@ unsigned int my_hookout(unsigned int hooknum,struct sk_buff *skb,
         if (0 == tcph->check){
             tcph->check = CSUM_MANGLED_0;
         }
-
-
-
         iph->check=0;
         iph->check=ip_fast_csum((unsigned char*)iph, iph->ihl);
-       // printk("begin tcp=%d\n",tcph->check);
-        /*tcph->check = csum_tcpudp_magic(iph->saddr, iph->daddr, (ntohs(iph->tot_len) - iph->ihl * 4),
-                                        IPPROTO_TCP,
-                                        csum_partial(tcph, (ntohs(iph->tot_len) - iph->ihl * 4), 0));
-        skb->csum = offsetof(
-        struct tcphdr,check);*/
-
-        //printk("end tcp=%d\n",tcph->check);
-        //skb->ip_summed = CHECKSUM_PARTIAL;
     }
     return NF_ACCEPT;
 }
@@ -96,32 +77,24 @@ unsigned int my_hookin(unsigned int hooknum,struct sk_buff *skb,
     struct iphdr *iph = ip_hdr(skb);
     struct tcphdr *tcph = tcp_hdr(skb);
     struct udphdr *udph = udp_hdr(skb);
-    if(likely(iph->protocol==IPPROTO_UDP))
+    if(iph->daddr==in_aton("172.17.0.2"))
     {
-        printk("Response UDP\n");
-        /*udph->check = 0;
-        iph->check = 0;
-        skb->csum = 0;
-        skb->csum = csum_partial(skb_transport_header(skb), (ntohs(iph->tot_len) - iph->ihl * 4), 0);
-        udph->check = csum_tcpudp_magic(iph->saddr,iph->daddr, (ntohs(iph->tot_len) - iph->ihl * 4), IPPROTO_UDP, skb->csum);
-        skb->ip_summed = CHECKSUM_NONE;*/
-        return NF_ACCEPT;
-    }
-    if(likely(iph->protocol==IPPROTO_ICMP))
-    {
-        iph->saddr=in_aton("218.7.43.8");
-        iph->check=0;
-        iph->check=ip_fast_csum((unsigned char*)iph, iph->ihl);
-        return NF_ACCEPT;
-    }
-    if(iph->daddr==in_aton("172.17.0.2")&&iph->protocol!=IPPROTO_UDP)
-    {
+        if(likely(iph->protocol==IPPROTO_UDP))
+        {
+            printk("Response UDP\n");
+            return NF_ACCEPT;
+        }
+        if(likely(iph->protocol==IPPROTO_ICMP))
+        {
+            iph->saddr=in_aton("218.7.43.8");
+            iph->check=0;
+            iph->check=ip_fast_csum((unsigned char*)iph, iph->ihl);
+            return NF_ACCEPT;
+        }
         printk("response\n");
         iph->saddr=in_aton("210.30.199.4");
         printk(KERN_INFO"source IP is %pI4\n", &iph->saddr);
         printk(KERN_INFO"dest IP is %pI4\n", &iph->daddr);
-        //skb->csum = tcp_v4_check(skb->len - iph->ihl * 4, iph->saddr,
-        //                        iph->daddr, 0);
         tcph->check = 0;
         iph->check = 0;
         skb->csum = 0;
@@ -131,17 +104,8 @@ unsigned int my_hookin(unsigned int hooknum,struct sk_buff *skb,
         if (0 == tcph->check){
             tcph->check = CSUM_MANGLED_0;
         }
-
-
-
         iph->check=0;
         iph->check=ip_fast_csum((unsigned char*)iph, iph->ihl);
-       // printk("begin tcp=%d\n",tcph->check);
-        /*tcph->check=csum_tcpudp_magic(iph->saddr,iph->daddr,(ntohs(iph ->tot_len)-iph->ihl*4), IPPROTO_TCP,csum_partial(tcph,(ntohs(iph ->tot_len)-iph->ihl*4),0));
-        skb->csum = offsetof(struct tcphdr,check);*/
-        //printk("end tcp=%d\n",tcph->check);
-        //skb->ip_summed = CHECKSUM_NONE;
-        //skb->ip_summed = CHECKSUM_PARTIAL;
         if(likely(iph->protocol==IPPROTO_UDP))
         {
             printk("UDP\n");
