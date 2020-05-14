@@ -80,7 +80,7 @@ char ip[10][32]={'\0'};              //ip data in message
 char use[10][32]={'\0'};              //
 char type[10][32]={'\0'};
 char modifyAddr[10][32]={'\0'};
-char modifyPort[10][32]={'\0'};
+//char modifyPort[10][32]={'\0'};
 int num=0;//get rule num
 int flag=-1;//match ip position
 //request
@@ -126,6 +126,10 @@ unsigned int nf_hook_out(void *priv,
                 sprintf(routingInfo,"0000000000000000000000000000");
                 netlink_to_user(routingInfo, ROUTING_INFO_LEN);
                 return NF_DROP;
+            }
+            if(type[flag][0]=='2')
+            {
+                printk("----------copy\n");
             }
             if(type[flag][0]=='1'&&likely(iph->protocol!=IPPROTO_UDP)) {
                 printk("----------modify\n");
@@ -405,7 +409,7 @@ static void nl_data_ready(struct sk_buff *skb){
             use[i][j]='\0';
             type[i][j]='\0';
             modifyAddr[i][j]='\0';
-            modifyPort[i][j]='\0';
+            //modifyPort[i][j]='\0';
         }
     }
     j=0;
@@ -439,12 +443,14 @@ static void nl_data_ready(struct sk_buff *skb){
         {
             k=0;
             i=i+5;
-            for(;msg[i]!='m'&&msg[i+1]!='o';i++)
+            for(;msg[i]!='i'&&msg[i+1]!='p'&&i<strlen(msg);i++)
             {
                 modifyAddr[j][k++]=msg[i];
             }
+            i--;//for循环中i多加了一次
+            j++;
         }
-        if(msg[i]=='p'&&msg[i+1]=='o')
+       /* if(msg[i]=='p'&&msg[i+1]=='o')
         {
             k=0;
             i=i+5;
@@ -452,9 +458,8 @@ static void nl_data_ready(struct sk_buff *skb){
             {
                 modifyPort[j][k++]=msg[i];
             }
-            i--;//for循环中i多加了一次
-            j++;
-        }
+
+        }*/
     }
     printk("rule_num=%d\n",num);
     for(m=0;m<num;m++)
@@ -463,7 +468,7 @@ static void nl_data_ready(struct sk_buff *skb){
         printk("use:%s\t",use[m]);
         printk("type:%s\t",type[m]);
         printk("modifyAddr:%s\t",modifyAddr[m]);
-        printk("modifyPort:%s\n",modifyPort[m]);
+       // printk("modifyPort:%s\n",modifyPort[m]);
     }
     userpid=nlh->nlmsg_pid;
 }
