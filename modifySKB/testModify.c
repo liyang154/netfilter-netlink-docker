@@ -52,9 +52,7 @@ unsigned int my_hookout(unsigned int hooknum,struct sk_buff *skb,
         printk("request\n");
         printk(KERN_INFO"source IP is %pI4\n", &iph->saddr);
         printk(KERN_INFO"dest IP is %pI4\n", &iph->daddr);
-        iph->daddr=in_aton("218.7.43.8");
-        ip_hdr_off = iph->ihl << 2;
-        ntcp_hdr_off = tcph->doff << 2;
+        iph->daddr=in_aton("210.30.199.4");
         tcph->check = 0;
         iph->check = 0;
         skb->csum = 0;
@@ -92,7 +90,7 @@ unsigned int my_hookin(unsigned int hooknum,struct sk_buff *skb,
             return NF_ACCEPT;
         }
         printk("response\n");
-        iph->saddr=in_aton("210.30.199.4");
+        iph->saddr=in_aton("218.7.43.8");
         printk(KERN_INFO"source IP is %pI4\n", &iph->saddr);
         printk(KERN_INFO"dest IP is %pI4\n", &iph->daddr);
         tcph->check = 0;

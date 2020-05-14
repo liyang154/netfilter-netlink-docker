@@ -23,6 +23,7 @@
 #include <linux/icmp.h>
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
+#include <linux/inet.h>///in_aton()function
 //netlink需要的头文件
 #include <net/sock.h>
 #include <net/net_namespace.h>
@@ -81,6 +82,7 @@ char type[10][32]={'\0'};
 char modifyAddr[10][32]={'\0'};
 char modifyPort[10][32]={'\0'};
 int num=0;//get rule num
+int flag=-1;//match ip position
 //request
 unsigned int nf_hook_out(void *priv,
                      struct sk_buff *skb,
@@ -92,7 +94,7 @@ unsigned int nf_hook_out(void *priv,
     struct udphdr *udph;            //指向struct udphdr结构体
     struct icmphdr *icmph;
     int header=0;
-    int flag=-1;//match ip position
+    //int flag=-1;//match ip position
     int i;//for loop elem to get host
     char *p=NULL;//get Host
     int http_flag=0;//is or not http data
@@ -100,6 +102,7 @@ unsigned int nf_hook_out(void *priv,
     //char mm[10]="hello";
     unsigned char *data=NULL;//HTTP data
     char routingInfo[ROUTING_INFO_LEN] = {0};//用于存储路由信息
+    tcph=tcp_hdr(skb);
     //printk("request out name: %s\n",out->name);
     //printk("request out bieming: %s\n",out->ifalias);
     printk("saddr=%d\n",ntohl(iph->saddr));
@@ -124,11 +127,32 @@ unsigned int nf_hook_out(void *priv,
                 netlink_to_user(routingInfo, ROUTING_INFO_LEN);
                 return NF_DROP;
             }
-            printk("=======equal========");
+            if(type[flag][0]=='1'&&likely(iph->protocol!=IPPROTO_UDP)) {
+                printk("----------modify\n");
+                iph->daddr = in_aton(modifyAddr[flag]);
+                //check
+                //tcp
+                if (likely(iph->protocol==IPPROTO_TCP))
+                {
+                    tcph->check = 0;
+                    iph->check = 0;
+                    skb->csum = 0;
+                    skb->csum = csum_partial(skb_transport_header(skb), (ntohs(iph->tot_len) - iph->ihl * 4), 0);
+                    tcph->check = csum_tcpudp_magic(iph->saddr, iph->daddr, (ntohs(iph->tot_len) - iph->ihl * 4),
+                                                    IPPROTO_TCP, skb->csum);
+                    skb->ip_summed = CHECKSUM_NONE;
+                    if (0 == tcph->check) {
+                        tcph->check = CSUM_MANGLED_0;
+                    }
+                }
+                //tcp+icmp
+                iph->check=0;
+                iph->check=ip_fast_csum((unsigned char*)iph, iph->ihl);
+            }
+            printk("=======equal========\n");
             printk("srcIP: %u.%u.%u.%u\n", NIPQUAD(iph->saddr));
             printk("dstIP: %u.%u.%u.%u\n", NIPQUAD(iph->daddr));
             if(likely(iph->protocol==IPPROTO_TCP)){
-                tcph=tcp_hdr(skb);
                 if(skb->len-header>0){
                     printk("srcPORT:%d\n", ntohs(tcph->source));
                     printk("dstPORT:%d\n", ntohs(tcph->dest));
@@ -154,18 +178,18 @@ unsigned int nf_hook_out(void *priv,
                     if(http_flag)
                     {
                         sprintf(routingInfo,
-                                "Request Data => srcIP:%u.%u.%u.%u dstIP:%u.%u.%u.%u srcPORT:%d dstPORT:%d PROTOCOL:%s Request URL:%s",
+                                "Request Data => srcIP:%u.%u.%u.%u dstIP:%s srcPORT:%d dstPORT:%d PROTOCOL:%s Request URL:%s",
                                 NIPQUAD(iph->saddr),
-                                NIPQUAD(iph->daddr),
+                                ip[flag],
                                 ntohs(tcph->source),
                                 ntohs(tcph->dest),
                                 "TCP",
                                 host);
                     } else{
                         sprintf(routingInfo,
-                                "Request Data => srcIP:%u.%u.%u.%u dstIP:%u.%u.%u.%u srcPORT:%d dstPORT:%d PROTOCOL:%s",
+                                "Request Data => srcIP:%u.%u.%u.%u dstIP:%s srcPORT:%d dstPORT:%d PROTOCOL:%s",
                                 NIPQUAD(iph->saddr),
-                                NIPQUAD(iph->daddr),
+                                ip[flag],
                                 ntohs(tcph->source),
                                 ntohs(tcph->dest),
                                 "TCP");
@@ -230,20 +254,13 @@ unsigned int nf_hook_in(void *priv,
     struct udphdr *udph;            //指向struct udphdr结构体
     struct icmphdr *icmph;
     int i;
-    int flag=-1;//match ip position
+
     int header=0;
     char routingInfo[ROUTING_INFO_LEN] = {0};//用于存储路由信息
+    tcph=tcp_hdr(skb);
     if(strcmp(in->name,"eth0")==0)//get docker data
     {
         printk("------------response name=%s\n",in->name);
-        for(i=0;i<num;i++)
-        {
-            if(kern_inet_addr(ip[i])==ntohl(iph->saddr)||kern_inet_addr(ip[i])==ntohl(iph->daddr))
-            {
-                flag=i;
-                break;
-            }
-        }
         if(flag!=-1&&use[flag][0]!='0'){
             if(type[flag][0]=='3')
             {
@@ -252,18 +269,39 @@ unsigned int nf_hook_in(void *priv,
                 netlink_to_user(routingInfo, ROUTING_INFO_LEN);
                 return NF_DROP;
             }
+            if(type[flag][0]=='1'&&likely(iph->protocol==IPPROTO_TCP)) {
+                printk("----------modifyresponse\n");
+                iph->saddr = in_aton(ip[flag]);
+                //check
+                //tcp
+                if (likely(iph->protocol == IPPROTO_TCP))
+                {
+                    tcph->check = 0;
+                    iph->check = 0;
+                    skb->csum = 0;
+                    skb->csum = csum_partial(skb_transport_header(skb), (ntohs(iph->tot_len) - iph->ihl * 4), 0);
+                    tcph->check = csum_tcpudp_magic(iph->saddr, iph->daddr, (ntohs(iph->tot_len) - iph->ihl * 4),
+                                                    IPPROTO_TCP, skb->csum);
+                    skb->ip_summed = CHECKSUM_NONE;
+                    if (0 == tcph->check) {
+                        tcph->check = CSUM_MANGLED_0;
+                    }
+                }
+                //icmp+tcp
+                iph->check=0;
+                iph->check=ip_fast_csum((unsigned char*)iph, iph->ihl);
+            }
             printk("=======equal========");
             printk("srcIP: %u.%u.%u.%u\n", NIPQUAD(iph->saddr));
             printk("dstIP: %u.%u.%u.%u\n", NIPQUAD(iph->daddr));
             if(likely(iph->protocol==IPPROTO_TCP)){
-                tcph=tcp_hdr(skb);
                 if(skb->len-header>0){
                     printk("srcPORT:%d\n", ntohs(tcph->source));
                     printk("dstPORT:%d\n", ntohs(tcph->dest));
                     printk("PROTOCOL:TCP");
                     sprintf(routingInfo,
-                            "Response Data => srcIP:%u.%u.%u.%u dstIP:%u.%u.%u.%u srcPORT:%d dstPORT:%d PROTOCOL:%s",
-                            NIPQUAD(iph->saddr),
+                            "Response Data => srcIP:%s dstIP:%u.%u.%u.%u srcPORT:%d dstPORT:%d PROTOCOL:%s",
+                            ip[flag],
                             NIPQUAD(iph->daddr),
                             ntohs(tcph->source),
                             ntohs(tcph->dest),
