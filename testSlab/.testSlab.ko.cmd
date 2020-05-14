@@ -1,0 +1,1 @@
+cmd_/root/modules/netfilter-netlink-docker/testSlab/testSlab.ko := ld -r -m elf_x86_64 -T ./scripts/module-common.lds --build-id  -o /root/modules/netfilter-netlink-docker/testSlab/testSlab.ko /root/modules/netfilter-netlink-docker/testSlab/testSlab.o /root/modules/netfilter-netlink-docker/testSlab/testSlab.mod.o
