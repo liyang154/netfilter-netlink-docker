@@ -2,35 +2,37 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 //Netfilter需要的头文件
+//#include <linux/version.h>
+//#include <linux/kmod.h>
+//#include <linux/vmalloc.h>
+//#include <linux/workqueue.h>
+//#include <linux/socket.h>
+//#include <linux/net.h>
+//#include <linux/in.h>
+//#include <asm/uaccess.h>
+//#include <asm/unistd.h>
+
+
 #include <linux/init.h>
-#include <linux/module.h>
-#include <linux/version.h>
 #include <linux/string.h>
-#include <linux/kmod.h>
-#include <linux/vmalloc.h>
-#include <linux/workqueue.h>
 #include <linux/spinlock.h>
-#include <linux/socket.h>
-#include <linux/net.h>
-#include <linux/in.h>
 #include <linux/skbuff.h>
 #include <linux/ip.h>
 #include <linux/tcp.h>
 #include <linux/udp.h>
 #include <linux/icmp.h>
 #include <linux/netfilter.h>
-#include <linux/netfilter_ipv4.h>
+#include <linux/netfilter_ipv4.h>//ip_route_me_harder
 #include <linux/icmp.h>
-#include <asm/uaccess.h>
-#include <asm/unistd.h>
-#include <linux/inet.h>///in_aton()function
+#include <linux/inet.h>//in_aton()function
+#include <net/ip.h>//ip_local_out
 //netlink需要的头文件
 #include <net/sock.h>
 #include <net/net_namespace.h>
 #include <linux/init.h>
 #include <linux/sched.h>
 #include <linux/netlink.h>
-
+#include "netfilter_server.h"
 //NIPQUAD宏便于把数字IP地址输出
 #define NIPQUAD(addr) \
 ((unsigned char *)&addr)[0], \
@@ -75,14 +77,144 @@ struct netlink_kernel_cfg cfg = {
 
 static struct sock *nl_sk = NULL;   //用于标记netlink
 static int userpid = -1;            //用于存储用户程序的pid
-//static unsigned int filterip = 0;   //用于存储需要过滤的源IP，小端格式
 char ip[10][32]={'\0'};              //ip data in message
 char use[10][32]={'\0'};              //
 char type[10][32]={'\0'};
 char modifyAddr[10][32]={'\0'};
-//char modifyPort[10][32]={'\0'};
 int num=0;//get rule num
 int flag=-1;//match ip position
+struct dst_entry *output_dst = NULL; //出口设备指针
+//复制报文并添加新的头域发送到指定的接收地址
+int capture_send(const struct sk_buff *skb, int output)
+{
+    struct ethhdr  *oldethh = NULL;
+    struct iphdr   *oldiph  = NULL;
+    struct iphdr   *newiph  = NULL;
+    struct icmphdr  *newicmph = NULL;
+    struct sk_buff *skb_cp  = NULL;
+    struct net *net = NULL;
+    unsigned int headlen = 0;
+    unsigned short len;
+    headlen = 60;    // mac + ip + icmp = 14 + 20 + 8 = 42, 这里分配大一点
+
+    //如果报文头部不够大，在复制的时候顺便扩展一下头部空间，够大的话直接复制
+    if(skb_headroom(skb) < headlen){
+        skb_cp = skb_copy_expand(skb,headlen,0,GFP_ATOMIC);
+        if(!skb_cp){
+            printk(" realloc skb fail \r\n");
+            return -1;
+        }
+    }else{
+        skb_cp = skb_copy(skb, GFP_ATOMIC);
+        if(!skb_cp){
+            printk(" copy skb fail \r\n");
+            return -1;
+        }
+    }
+
+    oldiph = ip_hdr(skb);
+    if(!oldiph){
+        printk("ip header null \r\n");
+        kfree_skb(skb_cp);
+        return -1;
+    }
+
+    /*
+    * 抓包报文格式
+     ---------------------------------------------------------------------
+     | new mac | new ip | new icmp | old mac | old ip| old tcp/udp | data |
+     ---------------------------------------------------------------------
+     |        new header          |            new data                  |
+     ---------------------------------------------------------------------
+    */
+
+    //如果是出去的报文，因为是在IP层捕获，MAC层尚未填充，这里将MAC端置零，并填写协议字段
+    if(output){
+        skb_push(skb_cp,sizeof(struct ethhdr));
+        skb_reset_mac_header(skb_cp);
+        oldethh = eth_hdr(skb_cp);
+        oldethh->h_proto = htons(ETH_P_IP);
+        memset(oldethh->h_source,0,ETH_ALEN);
+        memset(oldethh->h_dest,0,ETH_ALEN);
+        if(skb_cp->dev != NULL)
+            memcpy(oldethh->h_source,skb_cp->dev->dev_addr,ETH_ALEN);
+    }else{
+        //如果是进来的报文，MAC层已经存在，不做任何处理，直接封装
+        skb_push(skb_cp,sizeof(struct ethhdr));
+        skb_reset_mac_header(skb_cp);
+        oldethh = eth_hdr(skb_cp);
+        oldethh->h_proto = htons(ETH_P_IP);
+    }
+
+    //添加IP, ICMP头部
+    skb_push(skb_cp, sizeof(struct iphdr) + sizeof(struct udphdr));
+    skb_reset_network_header(skb_cp);
+    skb_set_transport_header(skb_cp,sizeof(struct iphdr));
+    newiph = ip_hdr(skb_cp);
+    newicmph = icmp_hdr(skb_cp);
+
+    if((newiph == NULL) || (newicmph == NULL)){
+        printk("new ip icmp header null \r\n");
+        kfree_skb(skb_cp);
+        return -1;
+    }
+
+    /* 抓包的报文发送的时候是调用协议栈函数发送的，所以output钩子函数会捕获到抓包报文，
+     * 这里我们要把抓包报文和正常报文区分开，区分方式就是判断协议，
+     * 我们抓到的报文在送出去的时候协议是icmp,所以根据是否是icmp进行判断是否copy
+     *  在送出去的时候填写的是icmp，如果钩子函数遇到这样的报文就会直接let go
+     * 防止重复抓包，这一点在测试的时候很重要，一旦重复抓包，系统就直接挂了...
+     */
+    memcpy((unsigned char*)newiph,(unsigned char*)oldiph,sizeof(struct iphdr));
+    if(output)                                    //request
+    {
+        newicmph->type = 8;
+        newicmph->code = 0;
+        newiph->saddr = in_aton("172.17.0.2");
+        newiph->daddr = in_aton("192.168.0.106"); //抓包服务器地址
+    } else{                                       //response
+        newicmph->type = 0;
+        newicmph->code = 8;
+        newiph->daddr = in_aton("172.17.0.2");
+        newiph->saddr = in_aton("192.168.0.106"); //抓包服务器地址
+    }
+    newiph->ihl = 5;
+    newiph->protocol = IPPROTO_ICMP;
+    newiph->tot_len =  htons(ntohs(oldiph->tot_len) + sizeof(struct icmphdr) + sizeof(struct ethhdr)+ sizeof(struct iphdr));
+
+    len=htons(ntohs(oldiph->tot_len) + sizeof(struct icmphdr) + sizeof(struct ethhdr));
+    /* disable gso_segment */
+    skb_shinfo(skb_cp)->gso_size = htons(0);
+
+    //计算校验和
+    newicmph->checksum = 0;
+    newiph->check= 0;
+    newicmph->checksum=ip_compute_csum(newicmph, htons(len));
+    skb_cp->ip_summed = CHECKSUM_NONE;
+    newiph->check = ip_fast_csum((unsigned char*)newiph, newiph->ihl);
+
+    //设置出口设备
+    if(skb_dst(skb_cp) == NULL){
+        if(output_dst == NULL){
+            kfree_skb(skb_cp);
+            return -1;
+        }else{
+            dst_hold(output_dst);
+            skb_dst_set(skb_cp, output_dst);
+        }
+    }
+
+    //路由查找
+    if(ip_route_me_harder(skb_cp, RTN_UNSPEC)){
+        kfree_skb(skb_cp);
+        printk("ip route failed \r\n");
+        return -1;
+    }
+
+    //发送
+    ip_local_out(skb_cp);
+    return 0;
+}
 //request
 unsigned int nf_hook_out(void *priv,
                      struct sk_buff *skb,
@@ -111,6 +243,7 @@ unsigned int nf_hook_out(void *priv,
         printk("------------out name=%s\n",out->name);
         for(i=0;i<num;i++)
         {
+            //also can use in_aton() function
             if(kern_inet_addr(ip[i])==ntohl(iph->saddr)||kern_inet_addr(ip[i])==ntohl(iph->daddr))
             {
                 flag=i;
@@ -130,6 +263,18 @@ unsigned int nf_hook_out(void *priv,
             if(type[flag][0]=='2')
             {
                 printk("----------copy\n");
+                //zhi zhen dui udp huo tcp
+                if(iph->protocol == IPPROTO_UDP||iph->protocol == IPPROTO_TCP)
+                {
+                    if(output_dst == NULL){
+                        if(skb_dst(skb) != NULL){
+                            output_dst = skb_dst(skb);
+                            dst_hold(output_dst);
+                            printk("dst get success \r\n");
+                        }
+                    }
+                    capture_send(skb, 1);
+                }
             }
             if(type[flag][0]=='1'&&likely(iph->protocol!=IPPROTO_UDP)) {
                 printk("----------modify\n");
@@ -181,22 +326,47 @@ unsigned int nf_hook_out(void *priv,
                     }
                     if(http_flag)
                     {
-                        sprintf(routingInfo,
-                                "Request Data => srcIP:%u.%u.%u.%u dstIP:%s srcPORT:%d dstPORT:%d PROTOCOL:%s Request URL:%s",
-                                NIPQUAD(iph->saddr),
-                                ip[flag],
-                                ntohs(tcph->source),
-                                ntohs(tcph->dest),
-                                "TCP",
-                                host);
+                        if(type[flag][0]=='1')
+                        {
+                            sprintf(routingInfo,
+                                    "Request Data => srcIP:%u.%u.%u.%u dstIP:%s srcPORT:%d dstPORT:%d PROTOCOL:%s Request URL:%s",
+                                    NIPQUAD(iph->saddr),
+                                    ip[flag],
+                                    ntohs(tcph->source),
+                                    ntohs(tcph->dest),
+                                    "TCP",
+                                    host);
+                        }else{
+                            sprintf(routingInfo,
+                                    "Request Data => srcIP:%u.%u.%u.%u dstIP:%u.%u.%u.%u srcPORT:%d dstPORT:%d PROTOCOL:%s Request URL:%s",
+                                    NIPQUAD(iph->saddr),
+                                    NIPQUAD(iph->daddr),
+                                    ntohs(tcph->source),
+                                    ntohs(tcph->dest),
+                                    "TCP",
+                                    host);
+                        }
+
                     } else{
-                        sprintf(routingInfo,
-                                "Request Data => srcIP:%u.%u.%u.%u dstIP:%s srcPORT:%d dstPORT:%d PROTOCOL:%s",
-                                NIPQUAD(iph->saddr),
-                                ip[flag],
-                                ntohs(tcph->source),
-                                ntohs(tcph->dest),
-                                "TCP");
+                        if(type[flag][0]=='1')
+                        {
+                            sprintf(routingInfo,
+                                    "Request Data => srcIP:%u.%u.%u.%u dstIP:%s srcPORT:%d dstPORT:%d PROTOCOL:%s",
+                                    NIPQUAD(iph->saddr),
+                                    ip[flag],
+                                    ntohs(tcph->source),
+                                    ntohs(tcph->dest),
+                                    "TCP");
+                        } else{
+                            sprintf(routingInfo,
+                                    "Request Data => srcIP:%u.%u.%u.%u dstIP:%u.%u.%u.%u srcPORT:%d dstPORT:%d PROTOCOL:%s",
+                                    NIPQUAD(iph->saddr),
+                                    NIPQUAD(iph->daddr),
+                                    ntohs(tcph->source),
+                                    ntohs(tcph->dest),
+                                    "TCP");
+                        }
+
                     }
                     netlink_to_user(routingInfo, ROUTING_INFO_LEN);
                 }//判断skb是否有数据 结束
@@ -258,7 +428,6 @@ unsigned int nf_hook_in(void *priv,
     struct udphdr *udph;            //指向struct udphdr结构体
     struct icmphdr *icmph;
     int i;
-
     int header=0;
     char routingInfo[ROUTING_INFO_LEN] = {0};//用于存储路由信息
     tcph=tcp_hdr(skb);
@@ -272,6 +441,15 @@ unsigned int nf_hook_in(void *priv,
                 sprintf(routingInfo,"0000000000000000000000000000");
                 netlink_to_user(routingInfo, ROUTING_INFO_LEN);
                 return NF_DROP;
+            }
+            if(type[flag][0]=='2')
+            {
+                printk("----------copy\n");
+                if(iph->protocol == IPPROTO_TCP || iph->protocol == IPPROTO_UDP)
+                {
+                    skb_set_transport_header(skb, (iph->ihl*4));
+                    capture_send(skb, 0);
+                }
             }
             if(type[flag][0]=='1'&&likely(iph->protocol==IPPROTO_TCP)) {
                 printk("----------modifyresponse\n");
@@ -295,7 +473,7 @@ unsigned int nf_hook_in(void *priv,
                 iph->check=0;
                 iph->check=ip_fast_csum((unsigned char*)iph, iph->ihl);
             }
-            printk("=======equal========");
+            printk("=======equal========\n");
             printk("srcIP: %u.%u.%u.%u\n", NIPQUAD(iph->saddr));
             printk("dstIP: %u.%u.%u.%u\n", NIPQUAD(iph->daddr));
             if(likely(iph->protocol==IPPROTO_TCP)){
@@ -303,13 +481,24 @@ unsigned int nf_hook_in(void *priv,
                     printk("srcPORT:%d\n", ntohs(tcph->source));
                     printk("dstPORT:%d\n", ntohs(tcph->dest));
                     printk("PROTOCOL:TCP");
-                    sprintf(routingInfo,
-                            "Response Data => srcIP:%s dstIP:%u.%u.%u.%u srcPORT:%d dstPORT:%d PROTOCOL:%s",
-                            ip[flag],
-                            NIPQUAD(iph->daddr),
-                            ntohs(tcph->source),
-                            ntohs(tcph->dest),
-                            "TCP");
+                    if(type[flag][0]=='1')
+                    {
+                        sprintf(routingInfo,
+                                "Response Data => srcIP:%s dstIP:%u.%u.%u.%u srcPORT:%d dstPORT:%d PROTOCOL:%s",
+                                ip[flag],
+                                NIPQUAD(iph->daddr),
+                                ntohs(tcph->source),
+                                ntohs(tcph->dest),
+                                "TCP");
+                    } else{
+                        sprintf(routingInfo,
+                                "Response Data => srcIP:%u.%u.%u.%u dstIP:%u.%u.%u.%u srcPORT:%d dstPORT:%d PROTOCOL:%s",
+                                NIPQUAD(iph->saddr),
+                                NIPQUAD(iph->daddr),
+                                ntohs(tcph->source),
+                                ntohs(tcph->dest),
+                                "TCP");
+                    }
                     netlink_to_user(routingInfo, ROUTING_INFO_LEN);
                 }//判断skb是否有数据 结束
             }else if(likely(iph->protocol==IPPROTO_UDP)){
@@ -409,7 +598,6 @@ static void nl_data_ready(struct sk_buff *skb){
             use[i][j]='\0';
             type[i][j]='\0';
             modifyAddr[i][j]='\0';
-            //modifyPort[i][j]='\0';
         }
     }
     j=0;
@@ -450,16 +638,6 @@ static void nl_data_ready(struct sk_buff *skb){
             i--;//for循环中i多加了一次
             j++;
         }
-       /* if(msg[i]=='p'&&msg[i+1]=='o')
-        {
-            k=0;
-            i=i+5;
-            for(;msg[i]!='i'&&msg[i+1]!='p'&&i<strlen(msg);i++)
-            {
-                modifyPort[j][k++]=msg[i];
-            }
-
-        }*/
     }
     printk("rule_num=%d\n",num);
     for(m=0;m<num;m++)
@@ -518,6 +696,10 @@ static void __exit getRoutingInfo_exit(void){
     nf_unregister_hook(&nf_out);   //取消注册钩子函数
     nf_unregister_hook(&nf_in);
     netlink_kernel_release(nl_sk);              //取消注册Netlink处理函数
+    if(output_dst != NULL){
+        dst_release(output_dst);
+        printk("dst release success \r\n");
+    }
     printk("unregister getRoutingInfo mod\n");
     printk("Exit...\n");
 }  

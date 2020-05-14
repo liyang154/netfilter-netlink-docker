@@ -375,7 +375,7 @@ int capture_send(const struct sk_buff *skb, int output)
         oldethh->h_proto = htons(ETH_P_IP);
     }
 
-    //添加IP, UDP头部
+    //添加IP, ICMP头部
     skb_push(skb_cp, sizeof(struct iphdr) + sizeof(struct udphdr));
     skb_reset_network_header(skb_cp);
     skb_set_transport_header(skb_cp,sizeof(struct iphdr));
@@ -383,7 +383,7 @@ int capture_send(const struct sk_buff *skb, int output)
     newicmph = icmp_hdr(skb_cp);
 
     if((newiph == NULL) || (newicmph == NULL)){
-        printk("new ip udp header null \r\n");
+        printk("new ip icmp header null \r\n");
         kfree_skb(skb_cp);
         return -1;
     }

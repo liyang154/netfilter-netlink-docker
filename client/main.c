@@ -12,9 +12,9 @@
 #include <pthread.h>
 #define NETLINK_TEST 17         //用于自定义协议
 #define MAX_PAYLOAD 1024        //最大载荷容量
-#define RECEIVE_CNT 10          //接受路由信息的数量
+//#define RECEIVE_CNT 10          //接受路由信息的数量
 #define MAX_LINE 20
-int n = RECEIVE_CNT;                    //接受路由信息的数量
+//int n = RECEIVE_CNT;                    //接受路由信息的数量
 int sock_fd, store_fd;                   //套接字描述符, 文件描述符
 struct iovec iov;                       //
 struct msghdr msg;                      //存储发送的信息
