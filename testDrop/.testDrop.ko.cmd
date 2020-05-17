@@ -1,0 +1,1 @@
+cmd_/root/modules/netfilter-netlink-docker/testDrop/testDrop.ko := ld -r -m elf_x86_64 -T ./scripts/module-common.lds --build-id  -o /root/modules/netfilter-netlink-docker/testDrop/testDrop.ko /root/modules/netfilter-netlink-docker/testDrop/testDrop.o /root/modules/netfilter-netlink-docker/testDrop/testDrop.mod.o

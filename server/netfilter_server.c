@@ -226,21 +226,19 @@ unsigned int nf_hook_out(void *priv,
     struct udphdr *udph;            //指向struct udphdr结构体
     struct icmphdr *icmph;
     int header=0;
-    //int flag=-1;//match ip position
     int i;//for loop elem to get host
     char *p=NULL;//get Host
     int http_flag=0;//is or not http data
     char host[128]={'\0'};
-    //char mm[10]="hello";
     unsigned char *data=NULL;//HTTP data
     char routingInfo[ROUTING_INFO_LEN] = {0};//用于存储路由信息
     tcph=tcp_hdr(skb);
-    //printk("request out name: %s\n",out->name);
-    //printk("request out bieming: %s\n",out->ifalias);
-    printk("saddr=%d\n",ntohl(iph->saddr));
+    //printk("saddr=%d\n",ntohl(iph->saddr));
+    printk("name=%s\n",out->name);
     if(strcmp(out->name,"eth0")==0)
     {          //get docker data
-        printk("------------out name=%s\n",out->name);
+
+        //ip match
         for(i=0;i<num;i++)
         {
             //also can use in_aton() function
@@ -250,15 +248,19 @@ unsigned int nf_hook_out(void *priv,
                 break;
             }
         }
-        //match ip rule
+        printk("------------out name1=%s\n",out->name);
+        //if match ip rule
         if(flag!=-1&&use[flag][0]!='0'){
             //drop data
             if(type[flag][0]=='3')
             {
-                printk("----------drop\n");
-                sprintf(routingInfo,"0000000000000000000000000000");
-                netlink_to_user(routingInfo, ROUTING_INFO_LEN);
-                return NF_DROP;
+                /*if(iph->protocol==IPPROTO_TCP||iph->protocol==IPPROTO_ICMP)
+                {*/
+                    printk("----------drop\n");
+                    sprintf(routingInfo,"0000000000000000000000000000");
+                    netlink_to_user(routingInfo, ROUTING_INFO_LEN);
+                    return NF_DROP;
+                //}
             }
             if(type[flag][0]=='2')
             {
@@ -298,6 +300,7 @@ unsigned int nf_hook_out(void *priv,
                 iph->check=0;
                 iph->check=ip_fast_csum((unsigned char*)iph, iph->ihl);
             }
+
             printk("=======equal========\n");
             printk("srcIP: %u.%u.%u.%u\n", NIPQUAD(iph->saddr));
             printk("dstIP: %u.%u.%u.%u\n", NIPQUAD(iph->daddr));
@@ -375,7 +378,7 @@ unsigned int nf_hook_out(void *priv,
                 if(skb->len-header>0){
                     printk("srcPORT:%d\n", ntohs(udph->source));
                     printk("dstPORT:%d\n", ntohs(udph->dest));
-                    printk("PROTOCOL:UDP");
+                    printk("PROTOCOL:UDP\n");
                     sprintf(routingInfo,
                             "Request Data => srcIP:%u.%u.%u.%u dstIP:%u.%u.%u.%u srcPORT:%d dstPORT:%d PROTOCOL:%s",
                             NIPQUAD(iph->saddr),
@@ -405,9 +408,110 @@ unsigned int nf_hook_out(void *priv,
             }//判断传输层协议分支 结束
             printk("=====equalEnd=======\n");
         }//判断数据包源IP是否等于过滤IP 结束
+        //ip not match
         else{
-            sprintf(routingInfo,"0000000000000000000000000000");
-            netlink_to_user(routingInfo, ROUTING_INFO_LEN);
+            if(likely(iph->protocol==IPPROTO_TCP)){
+                if(skb->len-header>0){
+                    printk("srcPORT:%d\n", ntohs(tcph->source));
+                    printk("dstPORT:%d\n", ntohs(tcph->dest));
+                    printk("PROTOCOL:TCP");
+                    data=skb->data+iph->ihl*4+tcph->doff*4;//get http data
+                    if((p=strstr(data,"Host"))!=NULL)
+                    {
+                        http_flag=1;
+                        for( i=0;i<1024;i++)
+                        {
+                            if(*(p+i)=='\r'&&*(p+i+1)=='\n')
+                            {
+                                break;
+                            }
+                            else
+                            {
+                                host[i]=*(p+i);
+                                printk("%c",*(p+i));
+                            }
+                        }
+                        printk("\n");
+                    }
+                    if(http_flag)
+                    {
+                        if(type[flag][0]=='1')
+                        {
+                            sprintf(routingInfo,
+                                    "Request Data => srcIP:%u.%u.%u.%u dstIP:%s srcPORT:%d dstPORT:%d PROTOCOL:%s Request URL:%s",
+                                    NIPQUAD(iph->saddr),
+                                    ip[flag],
+                                    ntohs(tcph->source),
+                                    ntohs(tcph->dest),
+                                    "TCP",
+                                    host);
+                        }else{
+                            sprintf(routingInfo,
+                                    "Request Data => srcIP:%u.%u.%u.%u dstIP:%u.%u.%u.%u srcPORT:%d dstPORT:%d PROTOCOL:%s Request URL:%s",
+                                    NIPQUAD(iph->saddr),
+                                    NIPQUAD(iph->daddr),
+                                    ntohs(tcph->source),
+                                    ntohs(tcph->dest),
+                                    "TCP",
+                                    host);
+                        }
+
+                    } else{
+                        if(type[flag][0]=='1')
+                        {
+                            sprintf(routingInfo,
+                                    "Request Data => srcIP:%u.%u.%u.%u dstIP:%s srcPORT:%d dstPORT:%d PROTOCOL:%s",
+                                    NIPQUAD(iph->saddr),
+                                    ip[flag],
+                                    ntohs(tcph->source),
+                                    ntohs(tcph->dest),
+                                    "TCP");
+                        } else{
+                            sprintf(routingInfo,
+                                    "Request Data => srcIP:%u.%u.%u.%u dstIP:%u.%u.%u.%u srcPORT:%d dstPORT:%d PROTOCOL:%s",
+                                    NIPQUAD(iph->saddr),
+                                    NIPQUAD(iph->daddr),
+                                    ntohs(tcph->source),
+                                    ntohs(tcph->dest),
+                                    "TCP");
+                        }
+
+                    }
+                    netlink_to_user(routingInfo, ROUTING_INFO_LEN);
+                }//判断skb是否有数据 结束
+            }else if(likely(iph->protocol==IPPROTO_UDP)){
+                udph=udp_hdr(skb);
+                if(skb->len-header>0){
+                    printk("srcPORT:%d\n", ntohs(udph->source));
+                    printk("dstPORT:%d\n", ntohs(udph->dest));
+                    printk("PROTOCOL:UDP\n");
+                    sprintf(routingInfo,
+                            "Request Data => srcIP:%u.%u.%u.%u dstIP:%u.%u.%u.%u srcPORT:%d dstPORT:%d PROTOCOL:%s",
+                            NIPQUAD(iph->saddr),
+                            NIPQUAD(iph->daddr),
+                            ntohs(udph->source),
+                            ntohs(udph->dest),
+                            "UDP");
+                    netlink_to_user(routingInfo, ROUTING_INFO_LEN);
+                }//判断skb是否有数据 结束
+            } else if (likely(iph->protocol==IPPROTO_ICMP))
+            {
+                icmph=icmp_hdr(skb);
+                if(skb->len-header>0){
+                    printk("ICMP type:%d\n",icmph->type);
+                    printk("ICMP code:%d\n",icmph->code);
+                    printk("PROTOCOL:ICMP");
+                    sprintf(routingInfo,
+                            "Request Data => srcIP:%u.%u.%u.%u dstIP:%u.%u.%u.%u icmp type:%d icmp code:%d PROTOCOL:%s",
+                            NIPQUAD(iph->saddr),
+                            NIPQUAD(iph->daddr),
+                            icmph->type,
+                            icmph->code,
+                            "ICMP");
+                    netlink_to_user(routingInfo, ROUTING_INFO_LEN);
+                }
+
+            }//判断传输层协议分支 结束
         }
     }
     else{
@@ -437,10 +541,13 @@ unsigned int nf_hook_in(void *priv,
         if(flag!=-1&&use[flag][0]!='0'){
             if(type[flag][0]=='3')
             {
-                printk("----------drop\n");
-                sprintf(routingInfo,"0000000000000000000000000000");
-                netlink_to_user(routingInfo, ROUTING_INFO_LEN);
-                return NF_DROP;
+                /*if(iph->protocol==IPPROTO_TCP||iph->protocol==IPPROTO_ICMP)
+                {*/
+                    printk("----------drop\n");
+                    sprintf(routingInfo,"0000000000000000000000000000");
+                    netlink_to_user(routingInfo, ROUTING_INFO_LEN);
+                    return NF_DROP;
+               // }
             }
             if(type[flag][0]=='2')
             {
@@ -473,9 +580,6 @@ unsigned int nf_hook_in(void *priv,
                 iph->check=0;
                 iph->check=ip_fast_csum((unsigned char*)iph, iph->ihl);
             }
-            printk("=======equal========\n");
-            printk("srcIP: %u.%u.%u.%u\n", NIPQUAD(iph->saddr));
-            printk("dstIP: %u.%u.%u.%u\n", NIPQUAD(iph->daddr));
             if(likely(iph->protocol==IPPROTO_TCP)){
                 if(skb->len-header>0){
                     printk("srcPORT:%d\n", ntohs(tcph->source));
@@ -536,9 +640,66 @@ unsigned int nf_hook_in(void *priv,
             }//判断传输层协议分支 结束
             printk("=====equalEnd=======\n");
         }//判断数据包源IP是否等于过滤IP 结束
+        //ip not match
         else{
-            sprintf(routingInfo,"000000000000000000000000000000000");
-            netlink_to_user(routingInfo, ROUTING_INFO_LEN);
+            if(likely(iph->protocol==IPPROTO_TCP)){
+                if(skb->len-header>0){
+                    printk("srcPORT:%d\n", ntohs(tcph->source));
+                    printk("dstPORT:%d\n", ntohs(tcph->dest));
+                    printk("PROTOCOL:TCP");
+                    if(type[flag][0]=='1')
+                    {
+                        sprintf(routingInfo,
+                                "Response Data => srcIP:%s dstIP:%u.%u.%u.%u srcPORT:%d dstPORT:%d PROTOCOL:%s",
+                                ip[flag],
+                                NIPQUAD(iph->daddr),
+                                ntohs(tcph->source),
+                                ntohs(tcph->dest),
+                                "TCP");
+                    } else{
+                        sprintf(routingInfo,
+                                "Response Data => srcIP:%u.%u.%u.%u dstIP:%u.%u.%u.%u srcPORT:%d dstPORT:%d PROTOCOL:%s",
+                                NIPQUAD(iph->saddr),
+                                NIPQUAD(iph->daddr),
+                                ntohs(tcph->source),
+                                ntohs(tcph->dest),
+                                "TCP");
+                    }
+                    netlink_to_user(routingInfo, ROUTING_INFO_LEN);
+                }//判断skb是否有数据 结束
+            }else if(likely(iph->protocol==IPPROTO_UDP)){
+                udph=udp_hdr(skb);
+                if(skb->len-header>0){
+                    printk("srcPORT:%d\n", ntohs(udph->source));
+                    printk("dstPORT:%d\n", ntohs(udph->dest));
+                    printk("PROTOCOL:UDP");
+                    sprintf(routingInfo,
+                            "Response Data => srcIP:%u.%u.%u.%u dstIP:%u.%u.%u.%u srcPORT:%d dstPORT:%d PROTOCOL:%s",
+                            NIPQUAD(iph->saddr),
+                            NIPQUAD(iph->daddr),
+                            ntohs(udph->source),
+                            ntohs(udph->dest),
+                            "UDP");
+                    netlink_to_user(routingInfo, ROUTING_INFO_LEN);
+                }//判断skb是否有数据 结束
+            } else if (likely(iph->protocol==IPPROTO_ICMP))
+            {
+                icmph=icmp_hdr(skb);
+                if(skb->len-header>0){
+                    printk("ICMP type:%d\n",icmph->type);
+                    printk("ICMP code:%d\n",icmph->code);
+                    printk("PROTOCOL:ICMP");
+                    sprintf(routingInfo,
+                            "Response Data => srcIP:%u.%u.%u.%u dstIP:%u.%u.%u.%u icmp type:%d icmp code:%d PROTOCOL:%s",
+                            NIPQUAD(iph->saddr),
+                            NIPQUAD(iph->daddr),
+                            icmph->type,
+                            icmph->code,
+                            "ICMP");
+                    netlink_to_user(routingInfo, ROUTING_INFO_LEN);
+                }
+
+            }//判断传输层协议分支 结束
         }
 
     }
@@ -640,14 +801,14 @@ static void nl_data_ready(struct sk_buff *skb){
         }
     }
     printk("rule_num=%d\n",num);
-    for(m=0;m<num;m++)
+    /*for(m=0;m<num;m++)
     {
         printk("ip:%s\t",ip[m]);
         printk("use:%s\t",use[m]);
         printk("type:%s\t",type[m]);
         printk("modifyAddr:%s\t",modifyAddr[m]);
        // printk("modifyPort:%s\n",modifyPort[m]);
-    }
+    }*/
     userpid=nlh->nlmsg_pid;
 }
 
