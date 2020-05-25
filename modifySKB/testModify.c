@@ -17,6 +17,29 @@
 #include <linux/mm.h>
 #include <net/ip.h>
 struct dst_entry *output_dst = NULL; //出口设备指针
+int destIp[16]={0};
+char *sourceIp[16]={
+        "172.17.0.1",
+        "172.17.0.2",
+        "172.17.0.3",
+        "172.17.0.4",
+        "172.17.0.5",
+        "172.17.0.6",
+        "172.17.0.7",
+        "172.17.0.8",
+        "172.17.0.9",
+        "172.17.0.10",
+        "172.17.0.11",
+        "172.17.0.12",
+        "172.17.0.13",
+        "172.17.0.14",
+        "172.17.0.15",
+        "172.17.0.16",
+};
+int tcpSourcePort[16]={0};
+int udpSourcePort[16]={0};
+int icmpId[16]={0};
+int icmpSeq[16]={0};
 ////aaabbbccchhhiii
 unsigned int my_hookout(unsigned int hooknum,struct sk_buff *skb,
                         const struct net_device *in,
@@ -27,43 +50,89 @@ unsigned int my_hookout(unsigned int hooknum,struct sk_buff *skb,
     struct iphdr *iph = ip_hdr(skb);
     struct tcphdr *tcph = tcp_hdr(skb);
     struct udphdr *udph = udp_hdr(skb);
-    unsigned int   ip_hdr_off;
-    unsigned int ntcp_hdr_off;
-    if(iph->saddr==in_aton("172.17.0.2"))
+    struct icmphdr *icmph = icmp_hdr(skb);
+    int i;
+    int ipFlag=-1;//check docker ip
+    /*if(iph->protocol==IPPROTO_ICMP)
     {
-        if(likely(iph->protocol==IPPROTO_UDP))
+        printk("-------request-------\n");
+        printk("id=%d\n",icmph->un.echo.id);
+        printk("seq=%d\n",icmph->un.echo.sequence);
+    }*/
+    if(strcmp(out->name,"ens33")==0)
+    {
+        for(i=0;i<16;i++)
         {
-            printk("request UDP\n");
-            return NF_ACCEPT;
+            if(iph->saddr==in_aton(sourceIp[i]))
+            {
+                ipFlag=i;//docker ip
+                if(iph->protocol==IPPROTO_TCP)
+                {
+                    tcpSourcePort[i]=ntohs(tcph->source);//record source port
+                }
+                if(iph->protocol==IPPROTO_UDP)
+                {
+                    udpSourcePort[i]=ntohs(udph->source);
+                }
+                if(iph->protocol==IPPROTO_ICMP)
+                {
+                    icmpSeq[i]=icmph->un.echo.sequence;
+                    icmpId[i]=icmph->un.echo.id;
+                }
+                destIp[i]=iph->daddr;
+                printk("````destIp=%d\n````",destIp[i]);
+                break;
+            }
         }
-        if(likely(iph->protocol==IPPROTO_ICMP))
-        {
-            printk("ICMP\n");
-            printk(KERN_INFO"source IP is %pI4\n", &iph->saddr);
-            printk(KERN_INFO"dest IP is %pI4\n", &iph->daddr);
-            //iph->saddr=in_aton("192.168.0.101");
-            iph->saddr=in_aton("172.17.0.3");
-            iph->check=0;
-            iph->check=ip_fast_csum((unsigned char*)iph, iph->ihl);
-            //ip_route_me_harder(skb, RTN_UNSPEC);
-            return NF_ACCEPT;
+        if (ipFlag!=-1) {
+            if (likely(iph->protocol == IPPROTO_UDP)) {
+                iph->saddr = in_aton("192.168.0.101");
+                udph->check = 0;
+                iph->check = 0;
+                skb->csum = 0;
+                skb->csum = csum_partial(skb_transport_header(skb), (ntohs(iph->tot_len) - iph->ihl * 4), 0);
+                udph->check = csum_tcpudp_magic(iph->saddr, iph->daddr, (ntohs(iph->tot_len) - iph->ihl * 4), IPPROTO_UDP,
+                                                skb->csum);
+                skb->ip_summed = CHECKSUM_NONE;
+                if (0 == udph->check) {
+                    udph->check = CSUM_MANGLED_0;
+                }
+                iph->check = 0;
+                iph->check = ip_fast_csum((unsigned char *) iph, iph->ihl);
+                printk("request UDP\n");
+                return NF_ACCEPT;
+            }
+            if (likely(iph->protocol == IPPROTO_ICMP)) {
+                printk("request ICMP\n");
+                printk(KERN_INFO
+                "source IP is %pI4\n", &iph->saddr);
+                printk(KERN_INFO
+                "dest IP is %pI4\n", &iph->daddr);
+                iph->saddr = in_aton("192.168.0.101");
+                iph->check = 0;
+                iph->check = ip_fast_csum((unsigned char *) iph, iph->ihl);
+                ip_route_me_harder(skb, RTN_UNSPEC);
+                return NF_ACCEPT;
+            }
+            printk("request tcp\n");
+            printk(KERN_INFO
+            "source IP is %pI4\n", &iph->saddr);
+            printk(KERN_INFO
+            "dest IP is %pI4\n", &iph->daddr);
+            iph->saddr = in_aton("192.168.0.101");
+            tcph->check = 0;
+            iph->check = 0;
+            skb->csum = 0;
+            skb->csum = csum_partial(skb_transport_header(skb), (ntohs(iph->tot_len) - iph->ihl * 4), 0);
+            tcph->check = csum_tcpudp_magic(iph->saddr, iph->daddr, (ntohs(iph->tot_len) - iph->ihl * 4), IPPROTO_TCP,
+                                            skb->csum);
+            skb->ip_summed = CHECKSUM_NONE;
+            if (0 == tcph->check) {
+                tcph->check = CSUM_MANGLED_0;
+            }
+            iph->check = 0;
+            iph->check = ip_fast_csum((unsigned char *) iph, iph->ihl);
         }
-        printk("request tcp\n");
-        printk(KERN_INFO"source IP is %pI4\n", &iph->saddr);
-        printk(KERN_INFO"dest IP is %pI4\n", &iph->daddr);
-        //iph->saddr=in_aton("192.168.0.101");
-        iph->saddr=in_aton("172.17.0.3");
-        tcph->check = 0;
-        iph->check = 0;
-        skb->csum = 0;
-        skb->csum = csum_partial(skb_transport_header(skb), (ntohs(iph->tot_len) - iph->ihl * 4), 0);
-        tcph->check = csum_tcpudp_magic(iph->saddr,iph->daddr, (ntohs(iph->tot_len) - iph->ihl * 4), IPPROTO_TCP, skb->csum);
-        skb->ip_summed = CHECKSUM_NONE;
-        if (0 == tcph->check){
-            tcph->check = CSUM_MANGLED_0;
-        }
-        iph->check=0;
-        iph->check=ip_fast_csum((unsigned char*)iph, iph->ihl);
     }
     return NF_ACCEPT;
 }
@@ -75,58 +144,82 @@ unsigned int my_hookin(unsigned int hooknum,struct sk_buff *skb,
     struct iphdr *iph = ip_hdr(skb);
     struct tcphdr *tcph = tcp_hdr(skb);
     struct udphdr *udph = udp_hdr(skb);
-    printk(KERN_INFO"aaaaaresponse source IP is %pI4\n", &iph->saddr);
-    printk(KERN_INFO"aaaaadest IP is %pI4\n", &iph->daddr);
-    if(iph->daddr==in_aton("172.17.0.3"))
-    //if(iph->daddr==in_aton("192.168.0.101"))
+    struct icmphdr *icmph = icmp_hdr(skb);
+    int ipFlag=-1;
+    int i;
+    /*if(iph->protocol==IPPROTO_ICMP)
     {
-        if(likely(iph->protocol==IPPROTO_UDP))
+        printk("-------response-------\n");
+        printk("id=%d\n",icmph->un.echo.id);
+        printk("seq=%d\n",icmph->un.echo.sequence);
+    }*/
+    if(iph->daddr==in_aton("192.168.0.101")&&strcmp(in->name,"ens33")==0)
+    {
+        /*printk("response udp port=%d\n",ntohs(udph->dest));
+        printk("response tcp port=%d\n",ntohs(tcph->dest));*/
+        for(i=0;i<16;i++)
         {
-            printk("Response UDP\n");
-            return NF_ACCEPT;
+            if(ntohs(tcph->dest)==tcpSourcePort[i]&&iph->protocol==IPPROTO_TCP)
+            {
+                ipFlag=i;
+                break;
+            }
+            if(ntohs(udph->dest)==udpSourcePort[i]&&iph->protocol==IPPROTO_UDP)
+            {
+                ipFlag=i;
+                break;
+            }
+            if(iph->protocol==IPPROTO_ICMP&&icmph->un.echo.id==icmpId[i]&&icmph->un.echo.sequence==icmpSeq[i])
+            {
+                ipFlag=i;
+                break;
+            }
         }
-        if(likely(iph->protocol==IPPROTO_ICMP))
+        //docker data
+        if(ipFlag!=-1)
         {
-            printk("response ICMP\n");
-            printk(KERN_INFO"response source IP is %pI4\n", &iph->saddr);
+            if(likely(iph->protocol==IPPROTO_UDP))
+            {
+                printk("Response UDP\n");
+                iph->daddr=in_aton(sourceIp[ipFlag]);
+                udph->check = 0;
+                iph->check = 0;
+                skb->csum = 0;
+                skb->csum = csum_partial(skb_transport_header(skb), (ntohs(iph->tot_len) - iph->ihl * 4), 0);
+                udph->check = csum_tcpudp_magic(iph->saddr,iph->daddr, (ntohs(iph->tot_len) - iph->ihl * 4), IPPROTO_UDP, skb->csum);
+                skb->ip_summed = CHECKSUM_NONE;
+                if (0 == udph->check){
+                    udph->check = CSUM_MANGLED_0;
+                }
+                iph->check=0;
+                iph->check=ip_fast_csum((unsigned char*)iph, iph->ihl);
+                return NF_ACCEPT;
+            }
+            if(likely(iph->protocol==IPPROTO_ICMP))
+            {
+                printk("response ICMP\n");
+                printk(KERN_INFO"response source IP is %pI4\n", &iph->saddr);
+                printk(KERN_INFO"dest IP is %pI4\n", &iph->daddr);
+                iph->daddr=in_aton(sourceIp[ipFlag]);
+                iph->check=0;
+                iph->check=ip_fast_csum((unsigned char*)iph, iph->ihl);
+                return NF_ACCEPT;
+            }
+            printk(KERN_INFO"source IP is %pI4\n", &iph->saddr);
             printk(KERN_INFO"dest IP is %pI4\n", &iph->daddr);
-            //iph->saddr=in_aton("218.7.43.8");
-            iph->daddr=in_aton("172.17.0.2");
+            iph->daddr=in_aton(sourceIp[ipFlag]);
+            tcph->check = 0;
+            iph->check = 0;
+            skb->csum = 0;
+            skb->csum = csum_partial(skb_transport_header(skb), (ntohs(iph->tot_len) - iph->ihl * 4), 0);
+            tcph->check = csum_tcpudp_magic(iph->saddr,iph->daddr, (ntohs(iph->tot_len) - iph->ihl * 4), IPPROTO_TCP, skb->csum);
+            skb->ip_summed = CHECKSUM_NONE;
+            if (0 == tcph->check){
+                tcph->check = CSUM_MANGLED_0;
+            }
             iph->check=0;
             iph->check=ip_fast_csum((unsigned char*)iph, iph->ihl);
-            //路由查找
-           /* if(ip_route_me_harder(skb, RTN_UNSPEC)){
-               // kfree_skb(skb_cp);
-                printk("ip route failed \r\n");
-                return NF_ACCEPT;
-            }*/
-            /*struct dst_entry * dst=skb_dst(skb);
-            //dst_hold(dst);
-            if(dst==NULL)
-            {
-                printk("error to find dst\n");
-            }*/
-            //dst_release(dst);
-            //dst=NULL;
-            //skb->_skb_refdst = NULL;
-            //dst_release(skb->_skb_refdst);
-            return NF_ACCEPT;
         }
-        printk(KERN_INFO"source IP is %pI4\n", &iph->saddr);
-        printk(KERN_INFO"dest IP is %pI4\n", &iph->daddr);
-        //iph->saddr=in_aton("218.7.43.8");
-        iph->daddr=in_aton("172.17.0.2");
-        tcph->check = 0;
-        iph->check = 0;
-        skb->csum = 0;
-        skb->csum = csum_partial(skb_transport_header(skb), (ntohs(iph->tot_len) - iph->ihl * 4), 0);
-        tcph->check = csum_tcpudp_magic(iph->saddr,iph->daddr, (ntohs(iph->tot_len) - iph->ihl * 4), IPPROTO_TCP, skb->csum);
-        skb->ip_summed = CHECKSUM_NONE;
-        if (0 == tcph->check){
-            tcph->check = CSUM_MANGLED_0;
-        }
-        iph->check=0;
-        iph->check=ip_fast_csum((unsigned char*)iph, iph->ihl);
     }
     return NF_ACCEPT;
 }
@@ -136,11 +229,11 @@ unsigned int my_hookin1(unsigned int hooknum,struct sk_buff *skb,
                        int (*okfn)(struct sk_buff *))
 {
     struct iphdr *iph = ip_hdr(skb);
-    if(iph->protocol==IPPROTO_ICMP)
+    /*if(iph->protocol==IPPROTO_ICMP)
     {
         printk(KERN_INFO"forward source IP is %pI4\n", &iph->saddr);
         printk(KERN_INFO"forward dest IP is %pI4\n", &iph->daddr);
-    }
+    }*/
     return NF_ACCEPT;
 }
 static struct nf_hook_ops nh_out = {

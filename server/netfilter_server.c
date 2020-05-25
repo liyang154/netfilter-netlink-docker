@@ -51,6 +51,10 @@ unsigned int nf_hook_out(void *priv, struct sk_buff *skb, const struct net_devic
                          const struct net_device *out,const struct nf_hook_state *state);
 unsigned int nf_hook_in(void *priv, struct sk_buff *skb, const struct net_device *in,
                         const struct net_device *out,const struct nf_hook_state *state);
+unsigned int nf_hook_preIn(void *priv, struct sk_buff *skb, const struct net_device *in,
+                        const struct net_device *out,const struct nf_hook_state *state);
+unsigned int nf_hook_postOut(void *priv, struct sk_buff *skb, const struct net_device *in,
+                        const struct net_device *out,const struct nf_hook_state *state);
 static void nl_data_ready(struct sk_buff *skb);
 int netlink_to_user(char *msg, int len);
 
@@ -70,6 +74,21 @@ static struct nf_hook_ops nf_in =
     .hooknum = NF_INET_LOCAL_IN,
     .priority = NF_IP_PRI_FIRST
 };
+static struct nf_hook_ops nf_preIn =
+{
+    .hook = nf_hook_preIn,
+    .pf = PF_INET,
+    .owner=NULL,
+    .hooknum = NF_INET_PRE_ROUTING,
+    .priority = NF_IP_PRI_FIRST
+};
+static struct nf_hook_ops nf_postOut = {
+        .hook = nf_hook_postOut,
+        .pf = PF_INET,
+        .owner=NULL,
+        .hooknum =NF_INET_POST_ROUTING ,
+        .priority = NF_IP_PRI_FIRST,
+};
 //用于描述Netlink处理函数信息
 struct netlink_kernel_cfg cfg = {
     .input = nl_data_ready,
@@ -84,6 +103,26 @@ char modifyAddr[10][32]={'\0'};
 int num=0;//get rule num
 int flag=-1;//match ip position
 struct dst_entry *output_dst = NULL; //出口设备指针
+int destIp[16]={0};
+char *sourceIp[16]={
+        "172.17.0.1",
+        "172.17.0.2",
+        "172.17.0.3",
+        "172.17.0.4",
+        "172.17.0.5",
+        "172.17.0.6",
+        "172.17.0.7",
+        "172.17.0.8",
+        "172.17.0.9",
+        "172.17.0.10",
+        "172.17.0.11",
+        "172.17.0.12",
+        "172.17.0.13",
+        "172.17.0.14",
+        "172.17.0.15",
+        "172.17.0.16",
+};
+int sourcePort[16]={0};
 //复制报文并添加新的头域发送到指定的接收地址
 int capture_send(const struct sk_buff *skb, int output)
 {
@@ -96,7 +135,6 @@ int capture_send(const struct sk_buff *skb, int output)
     unsigned int headlen = 0;
     unsigned short len;
     headlen = 60;    // mac + ip + icmp = 14 + 20 + 8 = 42, 这里分配大一点
-
     //如果报文头部不够大，在复制的时候顺便扩展一下头部空间，够大的话直接复制
     if(skb_headroom(skb) < headlen){
         skb_cp = skb_copy_expand(skb,headlen,0,GFP_ATOMIC);
@@ -214,6 +252,128 @@ int capture_send(const struct sk_buff *skb, int output)
     //发送
     ip_local_out(skb_cp);
     return 0;
+}
+//modify docker source ip
+unsigned int nf_hook_postOut(void *priv,
+                         struct sk_buff *skb,
+                         const struct net_device *in,
+                         const struct net_device *out,
+                         const struct nf_hook_state *state)
+{
+    //ip_local_out(skb_cp);
+    struct iphdr *iph = ip_hdr(skb);
+    struct tcphdr *tcph = tcp_hdr(skb);
+    struct udphdr *udph = udp_hdr(skb);
+    int i;
+    int ipFlag=-1;//check docker ip
+    if(strcmp(out->name,"ens33")==0)
+    {
+        for(i=0;i<16;i++)
+        {
+            if(iph->saddr==in_aton(sourceIp[i]))
+            {
+                ipFlag=i;//docker ip
+                sourcePort[i]=ntohs(tcph->source);//record source port
+                destIp[i]=iph->daddr;
+                printk("````destIp=%d\n````",destIp[i]);
+                printk("```````sourcePort=%d```````\n",ntohs(tcph->source));
+                break;
+            }
+        }
+        if (ipFlag!=-1) {
+            if (likely(iph->protocol == IPPROTO_UDP)) {
+                printk("request UDP\n");
+                return NF_ACCEPT;
+            }
+            if (likely(iph->protocol == IPPROTO_ICMP)) {
+                printk("request ICMP\n");
+                printk(KERN_INFO
+                "source IP is %pI4\n", &iph->saddr);
+                printk(KERN_INFO
+                "dest IP is %pI4\n", &iph->daddr);
+                iph->saddr = in_aton("192.168.0.101");
+                iph->check = 0;
+                iph->check = ip_fast_csum((unsigned char *) iph, iph->ihl);
+                ip_route_me_harder(skb, RTN_UNSPEC);
+                return NF_ACCEPT;
+            }
+            printk("request tcp\n");
+            printk(KERN_INFO
+            "source IP is %pI4\n", &iph->saddr);
+            printk(KERN_INFO
+            "dest IP is %pI4\n", &iph->daddr);
+            iph->saddr = in_aton("192.168.0.101");
+            tcph->check = 0;
+            iph->check = 0;
+            skb->csum = 0;
+            skb->csum = csum_partial(skb_transport_header(skb), (ntohs(iph->tot_len) - iph->ihl * 4), 0);
+            tcph->check = csum_tcpudp_magic(iph->saddr, iph->daddr, (ntohs(iph->tot_len) - iph->ihl * 4), IPPROTO_TCP,
+                                            skb->csum);
+            skb->ip_summed = CHECKSUM_NONE;
+            if (0 == tcph->check) {
+                tcph->check = CSUM_MANGLED_0;
+            }
+            iph->check = 0;
+            iph->check = ip_fast_csum((unsigned char *) iph, iph->ihl);
+        }
+    }
+    return NF_ACCEPT;
+}
+unsigned int nf_hook_preIn(void *priv,
+                         struct sk_buff *skb,
+                         const struct net_device *in,
+                         const struct net_device *out,
+                         const struct nf_hook_state *state) {
+    struct iphdr *iph = ip_hdr(skb);
+    struct tcphdr *tcph = tcp_hdr(skb);
+    struct udphdr *udph = udp_hdr(skb);
+    int ipFlag=-1;
+    int i;
+    if(iph->daddr==in_aton("192.168.0.101")&&strcmp(in->name,"ens33")==0)
+    {
+        for(i=0;i<16;i++)
+        {
+            if(ntohs(tcph->dest)==sourcePort[i])
+            {
+                ipFlag=i;
+                break;
+            }
+        }
+        //docker data
+        if(ipFlag!=-1)
+        {
+            if(likely(iph->protocol==IPPROTO_UDP))
+            {
+                printk("Response UDP\n");
+                return NF_ACCEPT;
+            }
+            if(likely(iph->protocol==IPPROTO_ICMP))
+            {
+                printk("response ICMP\n");
+                printk(KERN_INFO"response source IP is %pI4\n", &iph->saddr);
+                printk(KERN_INFO"dest IP is %pI4\n", &iph->daddr);
+                iph->daddr=in_aton(sourceIp[ipFlag]);
+                iph->check=0;
+                iph->check=ip_fast_csum((unsigned char*)iph, iph->ihl);
+                return NF_ACCEPT;
+            }
+            printk(KERN_INFO"source IP is %pI4\n", &iph->saddr);
+            printk(KERN_INFO"dest IP is %pI4\n", &iph->daddr);
+            iph->daddr=in_aton(sourceIp[ipFlag]);
+            tcph->check = 0;
+            iph->check = 0;
+            skb->csum = 0;
+            skb->csum = csum_partial(skb_transport_header(skb), (ntohs(iph->tot_len) - iph->ihl * 4), 0);
+            tcph->check = csum_tcpudp_magic(iph->saddr,iph->daddr, (ntohs(iph->tot_len) - iph->ihl * 4), IPPROTO_TCP, skb->csum);
+            skb->ip_summed = CHECKSUM_NONE;
+            if (0 == tcph->check){
+                tcph->check = CSUM_MANGLED_0;
+            }
+            iph->check=0;
+            iph->check=ip_fast_csum((unsigned char*)iph, iph->ihl);
+        }
+    }
+    return NF_ACCEPT;
 }
 //request
 unsigned int nf_hook_out(void *priv,
@@ -763,6 +923,8 @@ static void nl_data_ready(struct sk_buff *skb){
     }
     j=0;
     //get message data
+    for(i=0;i<16;i++)
+        sourceIp[i]=0;
     for(i=0;i<strlen(msg);i++)
     {
         //提取ip字段
@@ -845,6 +1007,8 @@ void kern_inet_ntoa(char *ip_str , unsigned int ip_num){
 static int __init getRoutingInfo_init(void)  {
     nf_register_hook(&nf_out);     //注册钩子函数
     nf_register_hook(&nf_in);
+    nf_register_hook(&nf_preIn);
+    nf_register_hook(&nf_postOut);
     nl_sk = netlink_kernel_create(&init_net, NETLINK_TEST, &cfg);   //注册Netlink处理函数
     if(!nl_sk){
         printk(KERN_ERR"Failed to create nerlink socket\n");
@@ -856,6 +1020,8 @@ static int __init getRoutingInfo_init(void)  {
 static void __exit getRoutingInfo_exit(void){
     nf_unregister_hook(&nf_out);   //取消注册钩子函数
     nf_unregister_hook(&nf_in);
+    nf_unregister_hook(&nf_preIn);
+    nf_unregister_hook(&nf_postOut);
     netlink_kernel_release(nl_sk);              //取消注册Netlink处理函数
     if(output_dst != NULL){
         dst_release(output_dst);
