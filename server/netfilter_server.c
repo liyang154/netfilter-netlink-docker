@@ -101,8 +101,8 @@ char use[10][32]={'\0'};              //
 char type[10][32]={'\0'};
 char modifyAddr[10][32]={'\0'};
 int num=0;//get rule num
-int flag=-1;//match ip position
 struct dst_entry *output_dst = NULL; //出口设备指针
+int destIp[16]={0};
 char *sourceIp[16]={
         "172.17.0.1",
         "172.17.0.2",
@@ -121,7 +121,6 @@ char *sourceIp[16]={
         "172.17.0.15",
         "172.17.0.16",
 };
-int destIp[16]={0};
 int tcpSourcePort[16]={0};
 int udpSourcePort[16]={0};
 int icmpId[16]={0};
@@ -211,13 +210,13 @@ int capture_send(const struct sk_buff *skb, int output)
     {
         newicmph->type = 8;
         newicmph->code = 0;
-        newiph->saddr = oldiph->saddr;
-        newiph->daddr = oldiph->daddr; //抓包服务器地址
+        newiph->saddr = in_aton("172.17.0.2");
+        newiph->daddr = in_aton("192.168.0.106"); //抓包服务器地址
     } else{                                       //response
         newicmph->type = 0;
         newicmph->code = 8;
-        newiph->daddr = oldiph->daddr;
-        newiph->saddr = oldiph->saddr; //抓包服务器地址
+        newiph->daddr = in_aton("172.17.0.2");
+        newiph->saddr = in_aton("192.168.0.106"); //抓包服务器地址
     }
     newiph->ihl = 5;
     newiph->protocol = IPPROTO_ICMP;
@@ -263,7 +262,6 @@ unsigned int nf_hook_postOut(void *priv,
                          const struct net_device *out,
                          const struct nf_hook_state *state)
 {
-    //ip_local_out(skb_cp);
     struct iphdr *iph = ip_hdr(skb);
     struct tcphdr *tcph = tcp_hdr(skb);
     struct udphdr *udph = udp_hdr(skb);
@@ -351,8 +349,7 @@ unsigned int nf_hook_preIn(void *priv,
                          struct sk_buff *skb,
                          const struct net_device *in,
                          const struct net_device *out,
-                         const struct nf_hook_state *state)
-{
+                         const struct nf_hook_state *state) {
     struct iphdr *iph = ip_hdr(skb);
     struct tcphdr *tcph = tcp_hdr(skb);
     struct udphdr *udph = udp_hdr(skb);
@@ -451,13 +448,15 @@ unsigned int nf_hook_out(void *priv,
     char *p=NULL;//get Host
     int http_flag=0;//is or not http data
     char host[128]={'\0'};
-    unsigned char *data=NULL;//HTTP data
+    unsigned char *data=NULL;//HTTP datas
+    int flag=-1;//match ip position
     char routingInfo[ROUTING_INFO_LEN] = {0};//用于存储路由信息
     tcph=tcp_hdr(skb);
     //printk("saddr=%d\n",ntohl(iph->saddr));
     printk("name=%s\n",out->name);
     if(strcmp(out->name,"eth0")==0)
     {          //get docker data
+
         //ip match
         for(i=0;i<num;i++)
         {
@@ -754,10 +753,19 @@ unsigned int nf_hook_in(void *priv,
     int i;
     int header=0;
     char routingInfo[ROUTING_INFO_LEN] = {0};//用于存储路由信息
+    int flag=-1;//match ip position
     tcph=tcp_hdr(skb);
     if(strcmp(in->name,"eth0")==0)//get docker data
     {
         printk("------------response name=%s\n",in->name);
+        for(i=0;i<num;i++)
+        {
+            if(iph->saddr==in_aton(modifyAddr[i]))
+            {
+                flag=i;
+                break;
+            }
+        }
         if(flag!=-1&&use[flag][0]!='0'){
             if(type[flag][0]=='3')
             {
