@@ -17,7 +17,6 @@
 #include <linux/mm.h>
 #include <net/ip.h>
 struct dst_entry *output_dst = NULL; //出口设备指针
-int destIp[16]={0};
 char *sourceIp[16]={
         "172.17.0.1",
         "172.17.0.2",
@@ -36,6 +35,7 @@ char *sourceIp[16]={
         "172.17.0.15",
         "172.17.0.16",
 };
+int destIp[16]={0};
 int tcpSourcePort[16]={0};
 int udpSourcePort[16]={0};
 int icmpId[16]={0};
@@ -53,12 +53,6 @@ unsigned int my_hookout(unsigned int hooknum,struct sk_buff *skb,
     struct icmphdr *icmph = icmp_hdr(skb);
     int i;
     int ipFlag=-1;//check docker ip
-    /*if(iph->protocol==IPPROTO_ICMP)
-    {
-        printk("-------request-------\n");
-        printk("id=%d\n",icmph->un.echo.id);
-        printk("seq=%d\n",icmph->un.echo.sequence);
-    }*/
     if(strcmp(out->name,"ens33")==0)
     {
         for(i=0;i<16;i++)
@@ -147,16 +141,10 @@ unsigned int my_hookin(unsigned int hooknum,struct sk_buff *skb,
     struct icmphdr *icmph = icmp_hdr(skb);
     int ipFlag=-1;
     int i;
-    /*if(iph->protocol==IPPROTO_ICMP)
-    {
-        printk("-------response-------\n");
-        printk("id=%d\n",icmph->un.echo.id);
-        printk("seq=%d\n",icmph->un.echo.sequence);
-    }*/
     if(iph->daddr==in_aton("192.168.0.101")&&strcmp(in->name,"ens33")==0)
     {
-        /*printk("response udp port=%d\n",ntohs(udph->dest));
-        printk("response tcp port=%d\n",ntohs(tcph->dest));*/
+        printk(KERN_INFO"source IP is %pI4\n", &iph->saddr);
+        printk("`````fin=%d```````\n",tcph->fin);
         for(i=0;i<16;i++)
         {
             if(ntohs(tcph->dest)==tcpSourcePort[i]&&iph->protocol==IPPROTO_TCP)

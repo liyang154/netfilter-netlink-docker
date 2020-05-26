@@ -103,7 +103,6 @@ char modifyAddr[10][32]={'\0'};
 int num=0;//get rule num
 int flag=-1;//match ip position
 struct dst_entry *output_dst = NULL; //出口设备指针
-int destIp[16]={0};
 char *sourceIp[16]={
         "172.17.0.1",
         "172.17.0.2",
@@ -122,7 +121,11 @@ char *sourceIp[16]={
         "172.17.0.15",
         "172.17.0.16",
 };
-int sourcePort[16]={0};
+int destIp[16]={0};
+int tcpSourcePort[16]={0};
+int udpSourcePort[16]={0};
+int icmpId[16]={0};
+int icmpSeq[16]={0};
 //复制报文并添加新的头域发送到指定的接收地址
 int capture_send(const struct sk_buff *skb, int output)
 {
@@ -208,13 +211,13 @@ int capture_send(const struct sk_buff *skb, int output)
     {
         newicmph->type = 8;
         newicmph->code = 0;
-        newiph->saddr = in_aton("172.17.0.2");
-        newiph->daddr = in_aton("192.168.0.106"); //抓包服务器地址
+        newiph->saddr = oldiph->saddr;
+        newiph->daddr = oldiph->daddr; //抓包服务器地址
     } else{                                       //response
         newicmph->type = 0;
         newicmph->code = 8;
-        newiph->daddr = in_aton("172.17.0.2");
-        newiph->saddr = in_aton("192.168.0.106"); //抓包服务器地址
+        newiph->daddr = oldiph->daddr;
+        newiph->saddr = oldiph->saddr; //抓包服务器地址
     }
     newiph->ihl = 5;
     newiph->protocol = IPPROTO_ICMP;
@@ -264,6 +267,7 @@ unsigned int nf_hook_postOut(void *priv,
     struct iphdr *iph = ip_hdr(skb);
     struct tcphdr *tcph = tcp_hdr(skb);
     struct udphdr *udph = udp_hdr(skb);
+    struct icmphdr *icmph = icmp_hdr(skb);
     int i;
     int ipFlag=-1;//check docker ip
     if(strcmp(out->name,"ens33")==0)
@@ -273,15 +277,39 @@ unsigned int nf_hook_postOut(void *priv,
             if(iph->saddr==in_aton(sourceIp[i]))
             {
                 ipFlag=i;//docker ip
-                sourcePort[i]=ntohs(tcph->source);//record source port
+                if(iph->protocol==IPPROTO_TCP)
+                {
+                    tcpSourcePort[i]=ntohs(tcph->source);//record source port
+                }
+                if(iph->protocol==IPPROTO_UDP)
+                {
+                    udpSourcePort[i]=ntohs(udph->source);
+                }
+                if(iph->protocol==IPPROTO_ICMP)
+                {
+                    icmpSeq[i]=icmph->un.echo.sequence;
+                    icmpId[i]=icmph->un.echo.id;
+                }
                 destIp[i]=iph->daddr;
                 printk("````destIp=%d\n````",destIp[i]);
-                printk("```````sourcePort=%d```````\n",ntohs(tcph->source));
                 break;
             }
         }
         if (ipFlag!=-1) {
             if (likely(iph->protocol == IPPROTO_UDP)) {
+                iph->saddr = in_aton("192.168.0.101");
+                udph->check = 0;
+                iph->check = 0;
+                skb->csum = 0;
+                skb->csum = csum_partial(skb_transport_header(skb), (ntohs(iph->tot_len) - iph->ihl * 4), 0);
+                udph->check = csum_tcpudp_magic(iph->saddr, iph->daddr, (ntohs(iph->tot_len) - iph->ihl * 4), IPPROTO_UDP,
+                                                skb->csum);
+                skb->ip_summed = CHECKSUM_NONE;
+                if (0 == udph->check) {
+                    udph->check = CSUM_MANGLED_0;
+                }
+                iph->check = 0;
+                iph->check = ip_fast_csum((unsigned char *) iph, iph->ihl);
                 printk("request UDP\n");
                 return NF_ACCEPT;
             }
@@ -323,17 +351,38 @@ unsigned int nf_hook_preIn(void *priv,
                          struct sk_buff *skb,
                          const struct net_device *in,
                          const struct net_device *out,
-                         const struct nf_hook_state *state) {
+                         const struct nf_hook_state *state)
+{
     struct iphdr *iph = ip_hdr(skb);
     struct tcphdr *tcph = tcp_hdr(skb);
     struct udphdr *udph = udp_hdr(skb);
+    struct icmphdr *icmph = icmp_hdr(skb);
     int ipFlag=-1;
     int i;
     if(iph->daddr==in_aton("192.168.0.101")&&strcmp(in->name,"ens33")==0)
     {
+        /*printk("response udp port=%d\n",ntohs(udph->dest));
+        printk("response tcp port=%d\n",ntohs(tcph->dest));*/
         for(i=0;i<16;i++)
         {
-            if(ntohs(tcph->dest)==sourcePort[i])
+            if(ntohs(tcph->dest)==tcpSourcePort[i]&&iph->protocol==IPPROTO_TCP)
+            {
+                ipFlag=i;
+                //data transport finish
+                if(tcph->fin==1)
+                {
+                    //Reset SourcePort
+                    tcpSourcePort[i]=0;
+                    udpSourcePort[i]=0;
+                }
+                break;
+            }
+            if(ntohs(udph->dest)==udpSourcePort[i]&&iph->protocol==IPPROTO_UDP)
+            {
+                ipFlag=i;
+                break;
+            }
+            if(iph->protocol==IPPROTO_ICMP&&icmph->un.echo.id==icmpId[i]&&icmph->un.echo.sequence==icmpSeq[i])
             {
                 ipFlag=i;
                 break;
@@ -345,6 +394,18 @@ unsigned int nf_hook_preIn(void *priv,
             if(likely(iph->protocol==IPPROTO_UDP))
             {
                 printk("Response UDP\n");
+                iph->daddr=in_aton(sourceIp[ipFlag]);
+                udph->check = 0;
+                iph->check = 0;
+                skb->csum = 0;
+                skb->csum = csum_partial(skb_transport_header(skb), (ntohs(iph->tot_len) - iph->ihl * 4), 0);
+                udph->check = csum_tcpudp_magic(iph->saddr,iph->daddr, (ntohs(iph->tot_len) - iph->ihl * 4), IPPROTO_UDP, skb->csum);
+                skb->ip_summed = CHECKSUM_NONE;
+                if (0 == udph->check){
+                    udph->check = CSUM_MANGLED_0;
+                }
+                iph->check=0;
+                iph->check=ip_fast_csum((unsigned char*)iph, iph->ihl);
                 return NF_ACCEPT;
             }
             if(likely(iph->protocol==IPPROTO_ICMP))
@@ -397,7 +458,6 @@ unsigned int nf_hook_out(void *priv,
     printk("name=%s\n",out->name);
     if(strcmp(out->name,"eth0")==0)
     {          //get docker data
-
         //ip match
         for(i=0;i<num;i++)
         {
@@ -923,8 +983,6 @@ static void nl_data_ready(struct sk_buff *skb){
     }
     j=0;
     //get message data
-    for(i=0;i<16;i++)
-        sourceIp[i]=0;
     for(i=0;i<strlen(msg);i++)
     {
         //提取ip字段
