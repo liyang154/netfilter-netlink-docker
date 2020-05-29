@@ -93,7 +93,7 @@ static struct nf_hook_ops nf_postOut = {
 struct netlink_kernel_cfg cfg = {
     .input = nl_data_ready,
 };
-
+//spinlock_t spinlock;
 static struct sock *nl_sk = NULL;   //用于标记netlink
 static int userpid = -1;            //用于存储用户程序的pid
 char ip[10][32]={'\0'};              //ip data in message
@@ -121,6 +121,8 @@ char *sourceIp[16]={
         "172.17.0.15",
         "172.17.0.16",
 };
+int tcpTrueSourceIp[16]={0};
+int icmpTrueSourceIp[16]={0};
 int tcpSourcePort[16]={0};
 int udpSourcePort[16]={0};
 int icmpId[16]={0};
@@ -277,16 +279,22 @@ unsigned int nf_hook_postOut(void *priv,
                 ipFlag=i;//docker ip
                 if(iph->protocol==IPPROTO_TCP)
                 {
+                    //spin_lock(&spinlock);
                     tcpSourcePort[i]=ntohs(tcph->source);//record source port
+                    //spin_unlock(&spinlock);
                 }
                 if(iph->protocol==IPPROTO_UDP)
                 {
+                   // spin_lock(&spinlock);
                     udpSourcePort[i]=ntohs(udph->source);
+                    //spin_unlock(&spinlock);
                 }
                 if(iph->protocol==IPPROTO_ICMP)
                 {
+                    //spin_lock(&spinlock);
                     icmpSeq[i]=icmph->un.echo.sequence;
                     icmpId[i]=icmph->un.echo.id;
+                    //spin_unlock(&spinlock);
                 }
                 destIp[i]=iph->daddr;
                 printk("````destIp=%d\n````",destIp[i]);
@@ -312,7 +320,6 @@ unsigned int nf_hook_postOut(void *priv,
                 return NF_ACCEPT;
             }
             if (likely(iph->protocol == IPPROTO_ICMP)) {
-                printk("request ICMP\n");
                 printk(KERN_INFO
                 "source IP is %pI4\n", &iph->saddr);
                 printk(KERN_INFO
@@ -320,7 +327,6 @@ unsigned int nf_hook_postOut(void *priv,
                 iph->saddr = in_aton("192.168.0.101");
                 iph->check = 0;
                 iph->check = ip_fast_csum((unsigned char *) iph, iph->ihl);
-                ip_route_me_harder(skb, RTN_UNSPEC);
                 return NF_ACCEPT;
             }
             printk("request tcp\n");
@@ -365,13 +371,6 @@ unsigned int nf_hook_preIn(void *priv,
             if(ntohs(tcph->dest)==tcpSourcePort[i]&&iph->protocol==IPPROTO_TCP)
             {
                 ipFlag=i;
-                //data transport finish
-                if(tcph->fin==1)
-                {
-                    //Reset SourcePort
-                    tcpSourcePort[i]=0;
-                    udpSourcePort[i]=0;
-                }
                 break;
             }
             if(ntohs(udph->dest)==udpSourcePort[i]&&iph->protocol==IPPROTO_UDP)
@@ -442,7 +441,7 @@ unsigned int nf_hook_out(void *priv,
     struct iphdr *iph=ip_hdr(skb);  //指向struct iphdr结构体
     struct tcphdr *tcph;            //指向struct tcphdr结构体
     struct udphdr *udph;            //指向struct udphdr结构体
-    struct icmphdr *icmph;
+    struct icmphdr *icmph=icmp_hdr(skb);
     int header=0;
     int i;//for loop elem to get host
     char *p=NULL;//get Host
@@ -450,10 +449,10 @@ unsigned int nf_hook_out(void *priv,
     char host[128]={'\0'};
     unsigned char *data=NULL;//HTTP datas
     int flag=-1;//match ip position
+    int ipFlag=-1;
     char routingInfo[ROUTING_INFO_LEN] = {0};//用于存储路由信息
     tcph=tcp_hdr(skb);
     //printk("saddr=%d\n",ntohl(iph->saddr));
-    printk("name=%s\n",out->name);
     if(strcmp(out->name,"eth0")==0)
     {          //get docker data
 
@@ -461,13 +460,13 @@ unsigned int nf_hook_out(void *priv,
         for(i=0;i<num;i++)
         {
             //also can use in_aton() function
-            if(kern_inet_addr(ip[i])==ntohl(iph->saddr)||kern_inet_addr(ip[i])==ntohl(iph->daddr))
+            if(kern_inet_addr(ip[i])==ntohl(iph->daddr))
             {
                 flag=i;
                 break;
             }
         }
-        printk("------------out name1=%s\n",out->name);
+        //printk("------------out name1=%s\n",out->name);
         //if match ip rule
         if(flag!=-1&&use[flag][0]!='0'){
             //drop data
@@ -499,9 +498,33 @@ unsigned int nf_hook_out(void *priv,
             }
             if(type[flag][0]=='1'&&likely(iph->protocol!=IPPROTO_UDP)) {
                 printk("----------modify\n");
-                iph->daddr = in_aton(modifyAddr[flag]);
+                for(i=0;i<16;i++)
+                {
+                    if(iph->saddr==in_aton(sourceIp[i]))
+                    {
+                        ipFlag=i;//docker ip
+                        if(iph->protocol==IPPROTO_TCP)
+                        {
+                            //spin_lock(&spinlock);
+                            tcpSourcePort[i]=ntohs(tcph->source);//record source port
+                            tcpTrueSourceIp[i]=iph->daddr;
+                            //spin_unlock(&spinlock);
+                        }
+                        if(iph->protocol==IPPROTO_ICMP)
+                        {
+                            //spin_lock(&spinlock);
+                            icmpSeq[i]=icmph->un.echo.sequence;
+                            icmpId[i]=icmph->un.echo.id;
+                            icmpTrueSourceIp[i]=iph->daddr;
+                            //spin_unlock(&spinlock);
+                        }
+                        break;
+                    }
+                }
+                //trueSourceIp[flag]=iph->saddr;
                 //check
                 //tcp
+                iph->daddr = in_aton(modifyAddr[flag]);
                 if (likely(iph->protocol==IPPROTO_TCP))
                 {
                     tcph->check = 0;
@@ -520,14 +543,14 @@ unsigned int nf_hook_out(void *priv,
                 iph->check=ip_fast_csum((unsigned char*)iph, iph->ihl);
             }
 
-            printk("=======equal========\n");
+            /*printk("=======equal========\n");
             printk("srcIP: %u.%u.%u.%u\n", NIPQUAD(iph->saddr));
-            printk("dstIP: %u.%u.%u.%u\n", NIPQUAD(iph->daddr));
+            printk("dstIP: %u.%u.%u.%u\n", NIPQUAD(iph->daddr));*/
             if(likely(iph->protocol==IPPROTO_TCP)){
                 if(skb->len-header>0){
-                    printk("srcPORT:%d\n", ntohs(tcph->source));
+                   /* printk("srcPORT:%d\n", ntohs(tcph->source));
                     printk("dstPORT:%d\n", ntohs(tcph->dest));
-                    printk("PROTOCOL:TCP");
+                    printk("PROTOCOL:TCP");*/
                     data=skb->data+iph->ihl*4+tcph->doff*4;//get http data
                     if((p=strstr(data,"Host"))!=NULL)
                     {
@@ -595,8 +618,8 @@ unsigned int nf_hook_out(void *priv,
             }else if(likely(iph->protocol==IPPROTO_UDP)){
                 udph=udp_hdr(skb);
                 if(skb->len-header>0){
-                    printk("srcPORT:%d\n", ntohs(udph->source));
-                    printk("dstPORT:%d\n", ntohs(udph->dest));
+                    /*printk("srcPORT:%d\n", ntohs(udph->source));
+                    printk("dstPORT:%d\n", ntohs(udph->dest));*/
                     printk("PROTOCOL:UDP\n");
                     sprintf(routingInfo,
                             "Request Data => srcIP:%u.%u.%u.%u dstIP:%u.%u.%u.%u srcPORT:%d dstPORT:%d PROTOCOL:%s",
@@ -625,7 +648,7 @@ unsigned int nf_hook_out(void *priv,
                 }
 
             }//判断传输层协议分支 结束
-            printk("=====equalEnd=======\n");
+           // printk("=====equalEnd=======\n");
         }//判断数据包源IP是否等于过滤IP 结束
         //ip not match
         else{
@@ -749,23 +772,57 @@ unsigned int nf_hook_in(void *priv,
     struct iphdr *iph=ip_hdr(skb);  //指向struct iphdr结构体
     struct tcphdr *tcph;            //指向struct tcphdr结构体
     struct udphdr *udph;            //指向struct udphdr结构体
-    struct icmphdr *icmph;
+    struct icmphdr *icmph=icmp_hdr(skb);
     int i;
     int header=0;
     char routingInfo[ROUTING_INFO_LEN] = {0};//用于存储路由信息
     int flag=-1;//match ip position
     tcph=tcp_hdr(skb);
+    int ipFlag=-1;
     if(strcmp(in->name,"eth0")==0)//get docker data
     {
-        printk("------------response name=%s\n",in->name);
-        for(i=0;i<num;i++)
+        //printk("------------response name=%s\n",in->name);
+        //check port to make sure daddr
+        for(i=0;i<16;i++)
         {
-            if(iph->saddr==in_aton(modifyAddr[i]))
+            if(ntohs(tcph->dest)==tcpSourcePort[i]&&iph->protocol==IPPROTO_TCP)
             {
-                flag=i;
+                ipFlag=i;
+                //data transport finish
+                if(tcph->fin==1)
+                {
+                    //Reset SourcePort
+                    //spin_lock(&spinlock);
+                    tcpSourcePort[i]=0;
+                    udpSourcePort[i]=0;
+                    //spin_unlock(&spinlock);
+                }
+                break;
+            }
+            if(iph->protocol==IPPROTO_ICMP&&icmph->un.echo.id==icmpId[i]&&icmph->un.echo.sequence==icmpSeq[i])
+            {
+                ipFlag=i;
                 break;
             }
         }
+        if(ipFlag!=-1)
+        {
+            for(i=0;i<num;i++)
+            {
+                //if(iph->saddr==in_aton(modifyAddr[i])&&iph->daddr==trueSourceIp[i])
+                if(tcpTrueSourceIp[ipFlag]==in_aton(ip[i])&&iph->protocol==IPPROTO_TCP)
+                {
+                    flag=i;
+                    break;
+                }
+                if(icmpTrueSourceIp[ipFlag]==in_aton(ip[i])&&iph->protocol==IPPROTO_ICMP)
+                {
+                    flag=i;
+                    break;
+                }
+            }
+        }
+        printk("---flag===%d\n",flag);
         if(flag!=-1&&use[flag][0]!='0'){
             if(type[flag][0]=='3')
             {
@@ -777,7 +834,7 @@ unsigned int nf_hook_in(void *priv,
                     return NF_DROP;
                // }
             }
-            if(type[flag][0]=='2')
+            /*if(type[flag][0]=='2')
             {
                 printk("----------copy\n");
                 if(iph->protocol == IPPROTO_TCP || iph->protocol == IPPROTO_UDP)
@@ -785,7 +842,7 @@ unsigned int nf_hook_in(void *priv,
                     skb_set_transport_header(skb, (iph->ihl*4));
                     capture_send(skb, 0);
                 }
-            }
+            }*/
             if(type[flag][0]=='1'&&likely(iph->protocol==IPPROTO_TCP)) {
                 printk("----------modifyresponse\n");
                 iph->saddr = in_aton(ip[flag]);
@@ -810,8 +867,8 @@ unsigned int nf_hook_in(void *priv,
             }
             if(likely(iph->protocol==IPPROTO_TCP)){
                 if(skb->len-header>0){
-                    printk("srcPORT:%d\n", ntohs(tcph->source));
-                    printk("dstPORT:%d\n", ntohs(tcph->dest));
+                    /*printk("srcPORT:%d\n", ntohs(tcph->source));
+                    printk("dstPORT:%d\n", ntohs(tcph->dest));*/
                     printk("PROTOCOL:TCP");
                     if(type[flag][0]=='1')
                     {
@@ -836,8 +893,8 @@ unsigned int nf_hook_in(void *priv,
             }else if(likely(iph->protocol==IPPROTO_UDP)){
                 udph=udp_hdr(skb);
                 if(skb->len-header>0){
-                    printk("srcPORT:%d\n", ntohs(udph->source));
-                    printk("dstPORT:%d\n", ntohs(udph->dest));
+                    /*printk("srcPORT:%d\n", ntohs(udph->source));
+                    printk("dstPORT:%d\n", ntohs(udph->dest));*/
                     printk("PROTOCOL:UDP");
                     sprintf(routingInfo,
                             "Response Data => srcIP:%u.%u.%u.%u dstIP:%u.%u.%u.%u srcPORT:%d dstPORT:%d PROTOCOL:%s",
@@ -852,8 +909,8 @@ unsigned int nf_hook_in(void *priv,
             {
                 icmph=icmp_hdr(skb);
                 if(skb->len-header>0){
-                    printk("ICMP type:%d\n",icmph->type);
-                    printk("ICMP code:%d\n",icmph->code);
+                    printk("Response ICMP type:%d\n",icmph->type);
+                    printk("Response ICMP code:%d\n",icmph->code);
                     printk("PROTOCOL:ICMP");
                     sprintf(routingInfo,
                             "Response Data => srcIP:%u.%u.%u.%u dstIP:%u.%u.%u.%u icmp type:%d icmp code:%d PROTOCOL:%s",
@@ -866,7 +923,7 @@ unsigned int nf_hook_in(void *priv,
                 }
 
             }//判断传输层协议分支 结束
-            printk("=====equalEnd=======\n");
+            //printk("=====equalEnd=======\n");
         }//判断数据包源IP是否等于过滤IP 结束
         //ip not match
         else{
@@ -1029,14 +1086,15 @@ static void nl_data_ready(struct sk_buff *skb){
         }
     }
     printk("rule_num=%d\n",num);
-    /*for(m=0;m<num;m++)
+   for(m=0;m<num;m++)
     {
-        printk("ip:%s\t",ip[m]);
-        printk("use:%s\t",use[m]);
-        printk("type:%s\t",type[m]);
-        printk("modifyAddr:%s\t",modifyAddr[m]);
+       if(strcmp(ip[m],modifyAddr[m])==0)
+       {
+           use[m][0]='0';
+           printk("!!!!!!!!!!!!!!!ip=%s\tuse=%s\n",ip[m],use[m]);
+       }
        // printk("modifyPort:%s\n",modifyPort[m]);
-    }*/
+    }
     userpid=nlh->nlmsg_pid;
 }
 
@@ -1075,6 +1133,7 @@ static int __init getRoutingInfo_init(void)  {
     nf_register_hook(&nf_in);
     nf_register_hook(&nf_preIn);
     nf_register_hook(&nf_postOut);
+    //spin_lock_init(&spinlock);
     nl_sk = netlink_kernel_create(&init_net, NETLINK_TEST, &cfg);   //注册Netlink处理函数
     if(!nl_sk){
         printk(KERN_ERR"Failed to create nerlink socket\n");

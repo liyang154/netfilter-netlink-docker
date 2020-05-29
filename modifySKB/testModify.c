@@ -103,6 +103,7 @@ unsigned int my_hookout(unsigned int hooknum,struct sk_buff *skb,
                 printk(KERN_INFO
                 "dest IP is %pI4\n", &iph->daddr);
                 iph->saddr = in_aton("192.168.0.101");
+                iph->daddr=in_aton("218.7.43.8");
                 iph->check = 0;
                 iph->check = ip_fast_csum((unsigned char *) iph, iph->ihl);
                 ip_route_me_harder(skb, RTN_UNSPEC);
