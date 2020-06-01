@@ -53,7 +53,14 @@ unsigned int my_hookout(unsigned int hooknum,struct sk_buff *skb,
     struct icmphdr *icmph = icmp_hdr(skb);
     int i;
     int ipFlag=-1;//check docker ip
-    if(strcmp(out->name,"ens33")==0)
+    /*if(strcmp(out->name,"ens37")==0&&iph->saddr==in_aton("192.168.0.104"))
+    {
+        printk(KERN_INFO
+        "request ens37 source IP is %pI4\n", &iph->saddr);
+        printk(KERN_INFO
+        "request ens37 dest IP is %pI4\n", &iph->daddr);
+    }*/
+    if(strcmp(out->name,"ens37")==0)
     {
         for(i=0;i<16;i++)
         {
@@ -142,7 +149,14 @@ unsigned int my_hookin(unsigned int hooknum,struct sk_buff *skb,
     struct icmphdr *icmph = icmp_hdr(skb);
     int ipFlag=-1;
     int i;
-    if(iph->daddr==in_aton("192.168.0.101")&&strcmp(in->name,"ens33")==0)
+    /*if(strcmp(in->name,"ens37")==0&&iph->daddr==in_aton("192.168.0.104"))
+    {
+        printk(KERN_INFO
+        "response ens37 source IP is %pI4\n", &iph->saddr);
+        printk(KERN_INFO
+        "response ens37 dest IP is %pI4\n", &iph->daddr);
+    }*/
+    if(iph->daddr==in_aton("192.168.0.101")&&strcmp(in->name,"ens37")==0)
     {
         printk(KERN_INFO"source IP is %pI4\n", &iph->saddr);
         printk("`````fin=%d```````\n",tcph->fin);

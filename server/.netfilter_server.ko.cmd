@@ -1,0 +1,1 @@
+cmd_/root/modules/netfilter-netlink-docker/server/netfilter_server.ko := ld -r -m elf_x86_64 -T ./scripts/module-common.lds --build-id  -o /root/modules/netfilter-netlink-docker/server/netfilter_server.ko /root/modules/netfilter-netlink-docker/server/netfilter_server.o /root/modules/netfilter-netlink-docker/server/netfilter_server.mod.o

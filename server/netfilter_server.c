@@ -93,7 +93,7 @@ static struct nf_hook_ops nf_postOut = {
 struct netlink_kernel_cfg cfg = {
     .input = nl_data_ready,
 };
-//spinlock_t spinlock;
+spinlock_t spinlock;
 static struct sock *nl_sk = NULL;   //用于标记netlink
 static int userpid = -1;            //用于存储用户程序的pid
 char ip[10][32]={'\0'};              //ip data in message
@@ -279,22 +279,22 @@ unsigned int nf_hook_postOut(void *priv,
                 ipFlag=i;//docker ip
                 if(iph->protocol==IPPROTO_TCP)
                 {
-                    //spin_lock(&spinlock);
+                    spin_lock(&spinlock);
                     tcpSourcePort[i]=ntohs(tcph->source);//record source port
-                    //spin_unlock(&spinlock);
+                    spin_unlock(&spinlock);
                 }
                 if(iph->protocol==IPPROTO_UDP)
                 {
-                   // spin_lock(&spinlock);
+                    spin_lock(&spinlock);
                     udpSourcePort[i]=ntohs(udph->source);
-                    //spin_unlock(&spinlock);
+                    spin_unlock(&spinlock);
                 }
                 if(iph->protocol==IPPROTO_ICMP)
                 {
-                    //spin_lock(&spinlock);
+                    spin_lock(&spinlock);
                     icmpSeq[i]=icmph->un.echo.sequence;
                     icmpId[i]=icmph->un.echo.id;
-                    //spin_unlock(&spinlock);
+                    spin_unlock(&spinlock);
                 }
                 destIp[i]=iph->daddr;
                 printk("````destIp=%d\n````",destIp[i]);
@@ -303,7 +303,7 @@ unsigned int nf_hook_postOut(void *priv,
         }
         if (ipFlag!=-1) {
             if (likely(iph->protocol == IPPROTO_UDP)) {
-                iph->saddr = in_aton("192.168.0.101");
+                iph->saddr = in_aton("192.168.0.104");
                 udph->check = 0;
                 iph->check = 0;
                 skb->csum = 0;
@@ -324,7 +324,7 @@ unsigned int nf_hook_postOut(void *priv,
                 "source IP is %pI4\n", &iph->saddr);
                 printk(KERN_INFO
                 "dest IP is %pI4\n", &iph->daddr);
-                iph->saddr = in_aton("192.168.0.101");
+                iph->saddr = in_aton("192.168.0.104");
                 iph->check = 0;
                 iph->check = ip_fast_csum((unsigned char *) iph, iph->ihl);
                 return NF_ACCEPT;
@@ -334,7 +334,7 @@ unsigned int nf_hook_postOut(void *priv,
             "source IP is %pI4\n", &iph->saddr);
             printk(KERN_INFO
             "dest IP is %pI4\n", &iph->daddr);
-            iph->saddr = in_aton("192.168.0.101");
+            iph->saddr = in_aton("192.168.0.104");
             tcph->check = 0;
             iph->check = 0;
             skb->csum = 0;
@@ -362,7 +362,7 @@ unsigned int nf_hook_preIn(void *priv,
     struct icmphdr *icmph = icmp_hdr(skb);
     int ipFlag=-1;
     int i;
-    if(iph->daddr==in_aton("192.168.0.101")&&strcmp(in->name,"ens33")==0)
+    if(iph->daddr==in_aton("192.168.0.104")&&strcmp(in->name,"ens33")==0)
     {
         /*printk("response udp port=%d\n",ntohs(udph->dest));
         printk("response tcp port=%d\n",ntohs(tcph->dest));*/
@@ -505,18 +505,18 @@ unsigned int nf_hook_out(void *priv,
                         ipFlag=i;//docker ip
                         if(iph->protocol==IPPROTO_TCP)
                         {
-                            //spin_lock(&spinlock);
+                            spin_lock(&spinlock);
                             tcpSourcePort[i]=ntohs(tcph->source);//record source port
                             tcpTrueSourceIp[i]=iph->daddr;
-                            //spin_unlock(&spinlock);
+                            spin_unlock(&spinlock);
                         }
                         if(iph->protocol==IPPROTO_ICMP)
                         {
-                            //spin_lock(&spinlock);
+                            spin_lock(&spinlock);
                             icmpSeq[i]=icmph->un.echo.sequence;
                             icmpId[i]=icmph->un.echo.id;
                             icmpTrueSourceIp[i]=iph->daddr;
-                            //spin_unlock(&spinlock);
+                            spin_unlock(&spinlock);
                         }
                         break;
                     }
@@ -792,10 +792,10 @@ unsigned int nf_hook_in(void *priv,
                 if(tcph->fin==1)
                 {
                     //Reset SourcePort
-                    //spin_lock(&spinlock);
+                    spin_lock(&spinlock);
                     tcpSourcePort[i]=0;
                     udpSourcePort[i]=0;
-                    //spin_unlock(&spinlock);
+                    spin_unlock(&spinlock);
                 }
                 break;
             }
@@ -1133,7 +1133,7 @@ static int __init getRoutingInfo_init(void)  {
     nf_register_hook(&nf_in);
     nf_register_hook(&nf_preIn);
     nf_register_hook(&nf_postOut);
-    //spin_lock_init(&spinlock);
+    spin_lock_init(&spinlock);
     nl_sk = netlink_kernel_create(&init_net, NETLINK_TEST, &cfg);   //注册Netlink处理函数
     if(!nl_sk){
         printk(KERN_ERR"Failed to create nerlink socket\n");
