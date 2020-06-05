@@ -26,7 +26,6 @@ __attribute__((section("__versions"))) = {
 	{ 0xcf6b0abb, __VMLINUX_SYMBOL_STR(ip_local_out_sk) },
 	{ 0x4f735e7f, __VMLINUX_SYMBOL_STR(ip_route_me_harder) },
 	{ 0x20eadeb6, __VMLINUX_SYMBOL_STR(ip_compute_csum) },
-	{ 0x1b6314fd, __VMLINUX_SYMBOL_STR(in_aton) },
 	{ 0xa6862bef, __VMLINUX_SYMBOL_STR(skb_push) },
 	{ 0xf631c441, __VMLINUX_SYMBOL_STR(skb_copy_expand) },
 	{ 0x27e1a049, __VMLINUX_SYMBOL_STR(printk) },
@@ -39,7 +38,7 @@ __attribute__((section(".modinfo"))) =
 "depends=";
 
 
-MODULE_INFO(srcversion, "75C23976306716351374E1B");
+MODULE_INFO(srcversion, "7DED940A9105251CE2D221B");
 MODULE_INFO(rhelversion, "7.8");
 #ifdef RETPOLINE
 	MODULE_INFO(retpoline, "Y");

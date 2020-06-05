@@ -398,13 +398,13 @@ int capture_send(const struct sk_buff *skb, int output)
     {
         newicmph->type = 8;
         newicmph->code = 0;
-        newiph->saddr = in_aton("172.17.0.2");
-        newiph->daddr = in_aton("192.168.0.106"); //抓包服务器地址
+        newiph->saddr = oldiph->saddr;
+        newiph->daddr = oldiph->daddr; //抓包服务器地址
     } else{                                       //response
         newicmph->type = 0;
         newicmph->code = 8;
-        newiph->daddr = in_aton("172.17.0.2");
-        newiph->saddr = in_aton("192.168.0.106"); //抓包服务器地址
+        newiph->daddr = oldiph->daddr;
+        newiph->saddr = oldiph->saddr; //抓包服务器地址
     }
     newiph->ihl = 5;
     newiph->protocol = IPPROTO_ICMP;

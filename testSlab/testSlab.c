@@ -33,7 +33,6 @@ static int testslab_init(void)
                                0,
                                0,
                                ctor);
-
     /* 高速缓存中分配2个对象 */
     printk(KERN_ALERT "alloc one student....\n");
     stu1 = (struct student*)kmem_cache_alloc(myslab, GFP_KERNEL);

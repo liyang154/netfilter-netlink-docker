@@ -33,6 +33,8 @@
 #include <linux/sched.h>
 #include <linux/netlink.h>
 #include "netfilter_server.h"
+//slab
+#include <linux/slab.h>
 //NIPQUAD宏便于把数字IP地址输出
 #define NIPQUAD(addr) \
 ((unsigned char *)&addr)[0], \
@@ -44,6 +46,9 @@
 #define MAX_PAYLOAD 1024        //最大载荷容量
 #define ROUTING_INFO_LEN 512    //单个路由信息的容量
 
+//slab
+#define MYSLAB "dockerSlab"
+static struct kmem_cache *myslab;
 //函数声明
 unsigned int kern_inet_addr(char *ip_str);
 void kern_inet_ntoa(char *ip_str , unsigned int ip_num);
@@ -127,6 +132,17 @@ int tcpSourcePort[16]={0};
 int udpSourcePort[16]={0};
 int icmpId[16]={0};
 int icmpSeq[16]={0};
+// 申请内存时调用的构造函数
+static void ctor(void* obj)
+{
+    printk(KERN_ALERT "constructor is running....\n");
+}
+//record docker flow
+struct DockerFlow
+{
+    int flow[16];
+};
+struct DockerFlow *dockerFlow;
 //复制报文并添加新的头域发送到指定的接收地址
 int capture_send(const struct sk_buff *skb, int output)
 {
@@ -212,13 +228,13 @@ int capture_send(const struct sk_buff *skb, int output)
     {
         newicmph->type = 8;
         newicmph->code = 0;
-        newiph->saddr = in_aton("172.17.0.2");
-        newiph->daddr = in_aton("192.168.0.106"); //抓包服务器地址
+        newiph->saddr = oldiph->saddr;
+        newiph->daddr = oldiph->daddr; //抓包服务器地址
     } else{                                       //response
         newicmph->type = 0;
         newicmph->code = 8;
-        newiph->daddr = in_aton("172.17.0.2");
-        newiph->saddr = in_aton("192.168.0.106"); //抓包服务器地址
+        newiph->daddr = oldiph->daddr;
+        newiph->saddr = oldiph->saddr; //抓包服务器地址
     }
     newiph->ihl = 5;
     newiph->protocol = IPPROTO_ICMP;
@@ -302,6 +318,7 @@ unsigned int nf_hook_postOut(void *priv,
             }
         }
         if (ipFlag!=-1) {
+            dockerFlow->flow[ipFlag]+=skb->len;
             if (likely(iph->protocol == IPPROTO_UDP)) {
                 iph->saddr = in_aton("192.168.0.104");
                 udph->check = 0;
@@ -387,6 +404,7 @@ unsigned int nf_hook_preIn(void *priv,
         //docker data
         if(ipFlag!=-1)
         {
+            dockerFlow->flow[ipFlag]+=skb->len;
             if(likely(iph->protocol==IPPROTO_UDP))
             {
                 printk("Response UDP\n");
@@ -796,10 +814,21 @@ unsigned int nf_hook_in(void *priv,
                     tcpSourcePort[i]=0;
                     udpSourcePort[i]=0;
                     spin_unlock(&spinlock);
+                    sprintf(routingInfo,
+                            "container %u.%u.%u.%u flow: %d",
+                            NIPQUAD(iph->daddr),
+                            dockerFlow->flow[ipFlag]);
+                    netlink_to_user(routingInfo, ROUTING_INFO_LEN);
+                    dockerFlow->flow[ipFlag]=0;
                 }
                 break;
             }
             if(iph->protocol==IPPROTO_ICMP&&icmph->un.echo.id==icmpId[i]&&icmph->un.echo.sequence==icmpSeq[i])
+            {
+                ipFlag=i;
+                break;
+            }
+            if(iph->protocol==IPPROTO_ICMP)
             {
                 ipFlag=i;
                 break;
@@ -840,7 +869,7 @@ unsigned int nf_hook_in(void *priv,
                 if(iph->protocol == IPPROTO_TCP || iph->protocol == IPPROTO_UDP)
                 {
                     skb_set_transport_header(skb, (iph->ihl*4));
-                    capture_send(skb, 0);
+                    //capture_send(skb, 0);
                 }
             }*/
             if(type[flag][0]=='1'&&likely(iph->protocol==IPPROTO_TCP)) {
@@ -1129,6 +1158,7 @@ void kern_inet_ntoa(char *ip_str , unsigned int ip_num){
 }
 
 static int __init getRoutingInfo_init(void)  {
+    int i;
     nf_register_hook(&nf_out);     //注册钩子函数
     nf_register_hook(&nf_in);
     nf_register_hook(&nf_preIn);
@@ -1137,6 +1167,18 @@ static int __init getRoutingInfo_init(void)  {
     nl_sk = netlink_kernel_create(&init_net, NETLINK_TEST, &cfg);   //注册Netlink处理函数
     if(!nl_sk){
         printk(KERN_ERR"Failed to create nerlink socket\n");
+    }
+    //create slab
+    myslab = kmem_cache_create(MYSLAB,
+                               sizeof(struct DockerFlow),
+                               0,
+                               0,
+                               ctor);
+    dockerFlow=(struct DockerFlow*)kmem_cache_alloc(myslab, GFP_KERNEL);
+    //init slab data
+    for(i=0;i<16;i++)
+    {
+        dockerFlow->flow[i]=0;
     }
     printk("register getRoutingInfo mod\n");
     printk("Start...\n");
@@ -1152,6 +1194,8 @@ static void __exit getRoutingInfo_exit(void){
         dst_release(output_dst);
         printk("dst release success \r\n");
     }
+    // 释放高速缓存中的对象
+    kmem_cache_free(myslab, dockerFlow);
     printk("unregister getRoutingInfo mod\n");
     printk("Exit...\n");
 }  
