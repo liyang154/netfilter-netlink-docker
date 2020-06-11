@@ -35,6 +35,8 @@
 #include "netfilter_server.h"
 //slab
 #include <linux/slab.h>
+//time
+#include <linux/time.h>
 //NIPQUAD宏便于把数字IP地址输出
 #define NIPQUAD(addr) \
 ((unsigned char *)&addr)[0], \
@@ -68,7 +70,9 @@ static struct nf_hook_ops nf_out = {
     .hook = nf_hook_out,
     .pf = PF_INET,
     .owner=NULL,
-    .hooknum =NF_INET_LOCAL_OUT ,  
+    //.hooknum =NF_INET_PRE_ROUTING ,
+    //.hooknum =NF_INET_LOCAL_OUT ,
+    .hooknum =NF_INET_POST_ROUTING ,
     .priority = NF_IP_PRI_FIRST,
 };
 static struct nf_hook_ops nf_in =
@@ -76,7 +80,9 @@ static struct nf_hook_ops nf_in =
     .hook = nf_hook_in,
     .pf = PF_INET,
     .owner=NULL,
-    .hooknum = NF_INET_LOCAL_IN,
+    //.hooknum = NF_INET_POST_ROUTING,
+    //.hooknum = NF_INET_LOCAL_IN,
+    .hooknum = NF_INET_PRE_ROUTING,
     .priority = NF_IP_PRI_FIRST
 };
 static struct nf_hook_ops nf_preIn =
@@ -99,6 +105,9 @@ struct netlink_kernel_cfg cfg = {
     .input = nl_data_ready,
 };
 spinlock_t spinlock;
+//time
+struct  timeval  tv_begin,tv_end;
+
 static struct sock *nl_sk = NULL;   //用于标记netlink
 static int userpid = -1;            //用于存储用户程序的pid
 char ip[10][32]={'\0'};              //ip data in message
@@ -132,6 +141,7 @@ int tcpSourcePort[16]={0};
 int udpSourcePort[16]={0};
 int icmpId[16]={0};
 int icmpSeq[16]={0};
+int tcpStop=0;
 // 申请内存时调用的构造函数
 static void ctor(void* obj)
 {
@@ -169,14 +179,35 @@ int capture_send(const struct sk_buff *skb, int output)
             return -1;
         }
     }
-
+    skb_cp->copy_flag=1;
     oldiph = ip_hdr(skb);
     if(!oldiph){
         printk("ip header null \r\n");
         kfree_skb(skb_cp);
         return -1;
     }
-
+    if(oldiph->protocol==IPPROTO_ICMP)
+    {
+        //设置出口设备
+        if(skb_dst(skb_cp) == NULL){
+            if(output_dst == NULL){
+                kfree_skb(skb_cp);
+                return -1;
+            }else{
+                dst_hold(output_dst);
+                skb_dst_set(skb_cp, output_dst);
+            }
+        }
+        //路由查找
+        if(ip_route_me_harder(skb_cp, RTN_UNSPEC)){
+            kfree_skb(skb_cp);
+            printk("ip route failed \r\n");
+            return -1;
+        }
+        //发送
+        ip_local_out(skb_cp);
+        return 0;
+    }
     /*
     * 抓包报文格式
      ---------------------------------------------------------------------
@@ -236,6 +267,7 @@ int capture_send(const struct sk_buff *skb, int output)
         newiph->daddr = oldiph->daddr;
         newiph->saddr = oldiph->saddr; //抓包服务器地址
     }
+    newicmph->un.echo.sequence=100;
     newiph->ihl = 5;
     newiph->protocol = IPPROTO_ICMP;
     newiph->tot_len =  htons(ntohs(oldiph->tot_len) + sizeof(struct icmphdr) + sizeof(struct ethhdr)+ sizeof(struct iphdr));
@@ -295,25 +327,52 @@ unsigned int nf_hook_postOut(void *priv,
                 ipFlag=i;//docker ip
                 if(iph->protocol==IPPROTO_TCP)
                 {
+                    do_gettimeofday(&tv_begin);
                     spin_lock(&spinlock);
+                    do_gettimeofday(&tv_end);
+                    //printk("tv_begin_usec:%d\n",tv_begin.tv_usec);
+                    //printk("tv_end_usec:%d\n",tv_end.tv_usec);
+                    if((tv_end.tv_usec-tv_begin.tv_usec)>100)
+                    {
+                        printk("-----------time out\n");
+                        return NF_ACCEPT;
+                    }
                     tcpSourcePort[i]=ntohs(tcph->source);//record source port
                     spin_unlock(&spinlock);
                 }
                 if(iph->protocol==IPPROTO_UDP)
                 {
+                    do_gettimeofday(&tv_begin);
                     spin_lock(&spinlock);
+                    do_gettimeofday(&tv_end);
+                    //printk("tv_begin_usec:%d\n",tv_begin.tv_usec);
+                    //printk("tv_end_usec:%d\n",tv_end.tv_usec);
+                    if((tv_end.tv_usec-tv_begin.tv_usec)>100)
+                    {
+                        printk("-----------time out\n");
+                        return NF_ACCEPT;
+                    }
                     udpSourcePort[i]=ntohs(udph->source);
                     spin_unlock(&spinlock);
                 }
                 if(iph->protocol==IPPROTO_ICMP)
                 {
+                    do_gettimeofday(&tv_begin);
                     spin_lock(&spinlock);
+                    do_gettimeofday(&tv_end);
+                    //printk("tv_begin_usec:%d\n",tv_begin.tv_usec);
+                    //printk("tv_end_usec:%d\n",tv_end.tv_usec);
+                    if((tv_end.tv_usec-tv_begin.tv_usec)>100)
+                    {
+                        printk("-----------time out\n");
+                        return NF_ACCEPT;
+                    }
                     icmpSeq[i]=icmph->un.echo.sequence;
                     icmpId[i]=icmph->un.echo.id;
                     spin_unlock(&spinlock);
                 }
                 destIp[i]=iph->daddr;
-                printk("````destIp=%d\n````",destIp[i]);
+                printk("````destIp=%d\n",destIp[i]);
                 break;
             }
         }
@@ -379,7 +438,7 @@ unsigned int nf_hook_preIn(void *priv,
     struct icmphdr *icmph = icmp_hdr(skb);
     int ipFlag=-1;
     int i;
-    if(iph->daddr==in_aton("192.168.0.104")&&strcmp(in->name,"ens33")==0)
+    if(iph->daddr==in_aton("192.168.0.104"))
     {
         /*printk("response udp port=%d\n",ntohs(udph->dest));
         printk("response tcp port=%d\n",ntohs(tcph->dest));*/
@@ -471,8 +530,33 @@ unsigned int nf_hook_out(void *priv,
     char routingInfo[ROUTING_INFO_LEN] = {0};//用于存储路由信息
     tcph=tcp_hdr(skb);
     //printk("saddr=%d\n",ntohl(iph->saddr));
-    if(strcmp(out->name,"eth0")==0)
-    {          //get docker data
+   /* if(iph->protocol==IPPROTO_ICMP)
+    {
+        printk(KERN_INFO
+        "source IP is %pI4\n", &iph->saddr);
+        printk(KERN_INFO
+        "dest IP is %pI4\n", &iph->daddr);
+        printk("----------------------------------nf_out in name=%s\n",in->name);
+        printk("----------------------------------nf_out out name=%s\n",out->name);
+    }*/
+   //if(strcmp(in->name,"docker0")==0)
+    if(strcmp(out->name,"ens33")==0)
+    {
+        for(i=0;i<16;i++)
+        {
+            if(iph->saddr==in_aton(sourceIp[i]))
+            {
+                ipFlag=i;//docker ip
+                break;
+            }
+        }
+        //get docker data
+        if(ipFlag==-1)
+        {
+            sprintf(routingInfo,"0000000000000000000000000000");
+            netlink_to_user(routingInfo, ROUTING_INFO_LEN);
+            return NF_ACCEPT;
+        }
 
         //ip match
         for(i=0;i<num;i++)
@@ -484,6 +568,7 @@ unsigned int nf_hook_out(void *priv,
                 break;
             }
         }
+        printk("out flag=%d\n",flag);
         //printk("------------out name1=%s\n",out->name);
         //if match ip rule
         if(flag!=-1&&use[flag][0]!='0'){
@@ -502,7 +587,8 @@ unsigned int nf_hook_out(void *priv,
             {
                 printk("----------copy\n");
                 //zhi zhen dui udp huo tcp
-                if(iph->protocol == IPPROTO_UDP||iph->protocol == IPPROTO_TCP)
+                //if(iph->protocol == IPPROTO_UDP||iph->protocol == IPPROTO_TCP)
+                if(skb->copy_flag==0)
                 {
                     if(output_dst == NULL){
                         if(skb_dst(skb) != NULL){
@@ -523,17 +609,35 @@ unsigned int nf_hook_out(void *priv,
                         ipFlag=i;//docker ip
                         if(iph->protocol==IPPROTO_TCP)
                         {
+                            do_gettimeofday(&tv_begin);
                             spin_lock(&spinlock);
+                            do_gettimeofday(&tv_end);
+                            //printk("tv_begin_usec:%d\n",tv_begin.tv_usec);
+                            //printk("tv_end_usec:%d\n",tv_end.tv_usec);
+                            if((tv_end.tv_usec-tv_begin.tv_usec)>100)
+                            {
+                                printk("-----------time out\n");
+                                return NF_ACCEPT;
+                            }
                             tcpSourcePort[i]=ntohs(tcph->source);//record source port
-                            tcpTrueSourceIp[i]=iph->daddr;
+                            tcpTrueSourceIp[i]=ntohl(iph->daddr);
                             spin_unlock(&spinlock);
                         }
                         if(iph->protocol==IPPROTO_ICMP)
                         {
+                            do_gettimeofday(&tv_begin);
                             spin_lock(&spinlock);
+                            do_gettimeofday(&tv_end);
+                            //printk("tv_begin_usec:%d\n",tv_begin.tv_usec);
+                            //printk("tv_end_usec:%d\n",tv_end.tv_usec);
+                            if((tv_end.tv_usec-tv_begin.tv_usec)>100)
+                            {
+                                printk("-----------time out\n");
+                                return NF_ACCEPT;
+                            }
                             icmpSeq[i]=icmph->un.echo.sequence;
                             icmpId[i]=icmph->un.echo.id;
-                            icmpTrueSourceIp[i]=iph->daddr;
+                            icmpTrueSourceIp[i]=ntohl(iph->daddr);
                             spin_unlock(&spinlock);
                         }
                         break;
@@ -773,6 +877,16 @@ unsigned int nf_hook_out(void *priv,
 
             }//判断传输层协议分支 结束
         }
+        if(tcpStop==1)
+        {
+            sprintf(routingInfo,
+                    "container %u.%u.%u.%u flow: %d",
+                    NIPQUAD(iph->saddr),
+                    dockerFlow->flow[ipFlag]);
+            netlink_to_user(routingInfo, ROUTING_INFO_LEN);
+            dockerFlow->flow[ipFlag]=0;
+            tcpStop=0;
+        }
     }
     else{
         sprintf(routingInfo,"000000000000000000000000000");
@@ -787,9 +901,12 @@ unsigned int nf_hook_in(void *priv,
                             const struct net_device *in,
                             const struct net_device *out,
                             const struct nf_hook_state *state) {
+    //skb->lcy=1;
+    //skb->copy_flag=100;
+    //printk("lcy=---------------------------------------%d\n",skb->copy_flag);
     struct iphdr *iph=ip_hdr(skb);  //指向struct iphdr结构体
     struct tcphdr *tcph;            //指向struct tcphdr结构体
-    struct udphdr *udph;            //指向struct udphdr结构体
+    struct udphdr *udph=udp_hdr(skb);            //指向struct udphdr结构体
     struct icmphdr *icmph=icmp_hdr(skb);
     int i;
     int header=0;
@@ -797,7 +914,8 @@ unsigned int nf_hook_in(void *priv,
     int flag=-1;//match ip position
     tcph=tcp_hdr(skb);
     int ipFlag=-1;
-    if(strcmp(in->name,"eth0")==0)//get docker data
+    if(strcmp(in->name,"ens33")==0)//get docker data
+    //if(strcmp(out->name,"docker0")==0)//get docker data
     {
         //printk("------------response name=%s\n",in->name);
         //check port to make sure daddr
@@ -810,17 +928,39 @@ unsigned int nf_hook_in(void *priv,
                 if(tcph->fin==1)
                 {
                     //Reset SourcePort
+                    do_gettimeofday(&tv_begin);
                     spin_lock(&spinlock);
+                    do_gettimeofday(&tv_end);
+                    //printk("tv_begin_usec:%d\n",tv_begin.tv_usec);
+                    //printk("tv_end_usec:%d\n",tv_end.tv_usec);
+                    if((tv_end.tv_usec-tv_begin.tv_usec)>100)
+                    {
+                        printk("-----------time out\n");
+                        return NF_ACCEPT;
+                    }
                     tcpSourcePort[i]=0;
                     udpSourcePort[i]=0;
                     spin_unlock(&spinlock);
-                    sprintf(routingInfo,
-                            "container %u.%u.%u.%u flow: %d",
-                            NIPQUAD(iph->daddr),
-                            dockerFlow->flow[ipFlag]);
-                    netlink_to_user(routingInfo, ROUTING_INFO_LEN);
-                    dockerFlow->flow[ipFlag]=0;
                 }
+                break;
+            }
+            if(iph->protocol==IPPROTO_ICMP&&icmpSeq[i]==100)
+            {
+                ipFlag=i;
+                sprintf(routingInfo,
+                        "Response Data => srcIP:%u.%u.%u.%u dstIP:%u.%u.%u.%u icmp type:%d icmp code:%d PROTOCOL:%s",
+                        NIPQUAD(iph->saddr),
+                        NIPQUAD(iph->daddr),
+                        icmph->type,
+                        icmph->code,
+                        "ICMP");
+                netlink_to_user(routingInfo, ROUTING_INFO_LEN);
+                icmpSeq[i]=0;
+                return NF_ACCEPT;
+            }
+            if(ntohs(udph->dest)==udpSourcePort[i]&&iph->protocol==IPPROTO_UDP)
+            {
+                ipFlag=i;
                 break;
             }
             if(iph->protocol==IPPROTO_ICMP&&icmph->un.echo.id==icmpId[i]&&icmph->un.echo.sequence==icmpSeq[i])
@@ -828,23 +968,25 @@ unsigned int nf_hook_in(void *priv,
                 ipFlag=i;
                 break;
             }
-            if(iph->protocol==IPPROTO_ICMP)
-            {
-                ipFlag=i;
-                break;
-            }
+        }
+        if(ipFlag==-1)
+        {
+            sprintf(routingInfo,"0000000000000000000000000000");
+            netlink_to_user(routingInfo, ROUTING_INFO_LEN);
+            return NF_ACCEPT;
         }
         if(ipFlag!=-1)
         {
             for(i=0;i<num;i++)
             {
                 //if(iph->saddr==in_aton(modifyAddr[i])&&iph->daddr==trueSourceIp[i])
-                if(tcpTrueSourceIp[ipFlag]==in_aton(ip[i])&&iph->protocol==IPPROTO_TCP)
+                if(ntohl(tcpTrueSourceIp[ipFlag])==in_aton(ip[i])&&iph->protocol==IPPROTO_TCP)
                 {
+                    printk("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n");
                     flag=i;
                     break;
                 }
-                if(icmpTrueSourceIp[ipFlag]==in_aton(ip[i])&&iph->protocol==IPPROTO_ICMP)
+                if(ntohl(icmpTrueSourceIp[ipFlag])==in_aton(ip[i])&&iph->protocol==IPPROTO_ICMP)
                 {
                     flag=i;
                     break;
@@ -852,6 +994,7 @@ unsigned int nf_hook_in(void *priv,
             }
         }
         printk("---flag===%d\n",flag);
+        printk("---ipflag===%d\n",ipFlag);
         if(flag!=-1&&use[flag][0]!='0'){
             if(type[flag][0]=='3')
             {
@@ -960,7 +1103,7 @@ unsigned int nf_hook_in(void *priv,
                 if(skb->len-header>0){
                     printk("srcPORT:%d\n", ntohs(tcph->source));
                     printk("dstPORT:%d\n", ntohs(tcph->dest));
-                    printk("PROTOCOL:TCP");
+                    printk("PROTOCOL:TCP\n");
                     if(type[flag][0]=='1')
                     {
                         sprintf(routingInfo,
@@ -1015,7 +1158,10 @@ unsigned int nf_hook_in(void *priv,
 
             }//判断传输层协议分支 结束
         }
-
+        if(tcph->fin==1&&iph->protocol==IPPROTO_TCP)
+        {
+            tcpStop=1;
+        }
     }
     else{
         sprintf(routingInfo,"000000000000000000000000000000000");
@@ -1159,10 +1305,12 @@ void kern_inet_ntoa(char *ip_str , unsigned int ip_num){
 
 static int __init getRoutingInfo_init(void)  {
     int i;
+
+    //do_gettimeofday(&tv_begin);
     nf_register_hook(&nf_out);     //注册钩子函数
-    nf_register_hook(&nf_in);
-    nf_register_hook(&nf_preIn);
     nf_register_hook(&nf_postOut);
+    nf_register_hook(&nf_preIn);
+    nf_register_hook(&nf_in);
     spin_lock_init(&spinlock);
     nl_sk = netlink_kernel_create(&init_net, NETLINK_TEST, &cfg);   //注册Netlink处理函数
     if(!nl_sk){
@@ -1180,15 +1328,16 @@ static int __init getRoutingInfo_init(void)  {
     {
         dockerFlow->flow[i]=0;
     }
+
     printk("register getRoutingInfo mod\n");
     printk("Start...\n");
     return 0;  
 }  
 static void __exit getRoutingInfo_exit(void){
     nf_unregister_hook(&nf_out);   //取消注册钩子函数
-    nf_unregister_hook(&nf_in);
-    nf_unregister_hook(&nf_preIn);
     nf_unregister_hook(&nf_postOut);
+    nf_unregister_hook(&nf_preIn);
+    nf_unregister_hook(&nf_in);
     netlink_kernel_release(nl_sk);              //取消注册Netlink处理函数
     if(output_dst != NULL){
         dst_release(output_dst);
@@ -1196,6 +1345,7 @@ static void __exit getRoutingInfo_exit(void){
     }
     // 释放高速缓存中的对象
     kmem_cache_free(myslab, dockerFlow);
+    kmem_cache_destroy(myslab);
     printk("unregister getRoutingInfo mod\n");
     printk("Exit...\n");
 }  
